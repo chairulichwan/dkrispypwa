@@ -1,0 +1,26 @@
+# Folder dependensi (Wajib di-ignore agar tidak boros token)
+node_modules/
+vendor/
+
+# Folder hasil build/kompilasi
+dist/
+build/
+.next/
+out/
+
+# Folder sistem dan Git
+.git/
+.idea/
+.vscode/
+
+# File dokumentasi besar atau gambar (jika ada)
+*.mp4
+*.png
+*.jpg
+*.jpeg
+*.svg
+
+# File rahasia/konfigurasi lokal
+.env
+.env.*
+*.log

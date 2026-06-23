@@ -1,6 +1,7 @@
+//src\app\debts\components\useAddDebtForm.ts
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import { calcInstallment } from "@/lib/Installment"
 
@@ -47,12 +48,18 @@ export function useAddDebtForm({ contacts }: UseAddDebtFormProps) {
   const [startDate, setStartDate] = useState(() => getTodayString())
   const [loading, setLoading] = useState(false)
 
+  useEffect(() => {
+    if (isNewContact) return
+
+    const contactStillExists = contacts.some((contact) => contact.id === contactId)
+    if (!contactStillExists) {
+      setContactId(defaultContactId)
+    }
+  }, [contactId, contacts, defaultContactId, isNewContact])
+
   const amountNumeric = useMemo(() => parseInputRupiah(amount), [amount])
 
-  const isOverLimit = useMemo(
-    () => amountNumeric > 999_999_999_999,
-    [amountNumeric]
-  )
+  const isOverLimit = useMemo(() => amountNumeric > 999_999_999_999, [amountNumeric])
 
   const isDueDateInPast = useMemo(() => {
     if (!dueDate) return false
@@ -65,53 +72,6 @@ export function useAddDebtForm({ contacts }: UseAddDebtFormProps) {
 
     return due < today
   }, [dueDate])
-
-  const isDirty = useMemo(() => {
-    return Boolean(
-      amountNumeric > 0 ||
-        description.trim().length > 0 ||
-        dueDate.length > 0 ||
-        accountId.length > 0 ||
-        useInstallment ||
-        interestRate.length > 0 ||
-        installmentCount !== DEFAULT_INSTALLMENT_COUNT ||
-        interestType !== "flat" ||
-        type !== "piutang" ||
-        (isNewContact && newContactName.trim().length > 0) ||
-        (!isNewContact && contactSearch.trim().length > 0)
-    )
-  }, [
-    accountId,
-    amountNumeric,
-    contactSearch,
-    description,
-    dueDate,
-    installmentCount,
-    interestRate,
-    interestType,
-    isNewContact,
-    newContactName,
-    type,
-    useInstallment,
-  ])
-
-  const isValid = useMemo(() => {
-    if (amountNumeric <= 0 || isOverLimit) return false
-    if (isDueDateInPast) return false
-
-    if (isNewContact) {
-      return newContactName.trim().length > 0
-    }
-
-    return Boolean(contactId)
-  }, [
-    amountNumeric,
-    contactId,
-    isDueDateInPast,
-    isNewContact,
-    isOverLimit,
-    newContactName,
-  ])
 
   const filteredContacts = useMemo(() => {
     const keyword = contactSearch.trim().toLowerCase()
@@ -127,7 +87,7 @@ export function useAddDebtForm({ contacts }: UseAddDebtFormProps) {
   const installmentPreview = useMemo(() => {
     if (!useInstallment || amountNumeric <= 0) return null
 
-    const count = Math.min(360, Math.max(1, parseInt(installmentCount) || 1))
+    const count = Math.min(360, Math.max(1, parseInt(installmentCount, 10) || 1))
     const rate = Math.min(100, Math.max(0, parseFloat(interestRate) || 0))
 
     const summary = calcInstallment(
@@ -145,14 +105,49 @@ export function useAddDebtForm({ contacts }: UseAddDebtFormProps) {
       totalInterest: summary.totalInterest,
       totalPayment: summary.totalPayment,
     }
+  }, [amountNumeric, installmentCount, interestRate, interestType, startDate, useInstallment])
+
+  const isDirty = useMemo(() => {
+    return Boolean(
+      amountNumeric > 0 ||
+        description.trim().length > 0 ||
+        dueDate.length > 0 ||
+        accountId.length > 0 ||
+        useInstallment ||
+        interestRate.length > 0 ||
+        installmentCount !== DEFAULT_INSTALLMENT_COUNT ||
+        interestType !== "flat" ||
+        type !== "piutang" ||
+        (useInstallment && startDate !== getTodayString()) ||
+        (isNewContact && newContactName.trim().length > 0) ||
+        (!isNewContact && contactSearch.trim().length > 0)
+    )
   }, [
+    accountId,
     amountNumeric,
+    contactSearch,
+    description,
+    dueDate,
     installmentCount,
     interestRate,
     interestType,
+    isNewContact,
+    newContactName,
     startDate,
+    type,
     useInstallment,
   ])
+
+  const isValid = useMemo(() => {
+    if (amountNumeric <= 0 || isOverLimit) return false
+    if (isDueDateInPast) return false
+
+    if (isNewContact) {
+      return newContactName.trim().length > 0
+    }
+
+    return Boolean(contactId)
+  }, [amountNumeric, contactId, isDueDateInPast, isNewContact, isOverLimit, newContactName])
 
   const reset = () => {
     setType("piutang")
@@ -194,48 +189,32 @@ export function useAddDebtForm({ contacts }: UseAddDebtFormProps) {
   return {
     type,
     setType,
-
     contactId,
     setContactId,
-
     newContactName,
     setNewContactName,
-
     isNewContact,
-
     contactSearch,
     setContactSearch,
-
     accountId,
     setAccountId,
-
     amount,
-    setAmount,
-
     description,
     setDescription,
-
     dueDate,
     setDueDate,
-
     useInstallment,
     setUseInstallment,
-
     interestRate,
     setInterestRate,
-
     interestType,
     setInterestType,
-
     installmentCount,
     setInstallmentCount,
-
     startDate,
     setStartDate,
-
     loading,
     setLoading,
-
     amountNumeric,
     isOverLimit,
     isDueDateInPast,
@@ -243,7 +222,6 @@ export function useAddDebtForm({ contacts }: UseAddDebtFormProps) {
     isValid,
     filteredContacts,
     installmentPreview,
-
     reset,
     handleAmountChange,
     toggleIsNewContact,

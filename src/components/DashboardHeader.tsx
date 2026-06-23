@@ -1,4 +1,3 @@
-//src/components/DashboardHeader.tsx
 "use client"
 
 import { motion, AnimatePresence } from "framer-motion"
@@ -6,6 +5,7 @@ import { Bell, LogOut } from "lucide-react"
 import { useState, useCallback, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { INTERACTIVE_SPRING, TAP_FEEDBACK, EASE_OUT_SMOOTH } from "@/lib/motion"
 import { cn } from "@/lib/utils"
 import { ROUTES } from "@/lib/routes"
 import { useRealtimeDebts } from "@/hooks/useRealtimeDebts"
@@ -18,7 +18,7 @@ interface DashboardHeaderProps {
   notificationCount?: number
 }
 
-export const HEADER_HEIGHT = 90
+export const HEADER_HEIGHT = 88
 
 const triggerHaptic = () => {
   if (typeof navigator !== "undefined" && navigator.vibrate) {
@@ -34,7 +34,6 @@ export default function DashboardHeader({
   notificationCount = 0,
 }: DashboardHeaderProps) {
   const router = useRouter()
-  const [activeAction, setActiveAction] = useState<"logout" | null>(null)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
   const [isScrolled, setIsScrolled] = useState(false)
 
@@ -54,7 +53,7 @@ export default function DashboardHeader({
 
   useEffect(() => {
     if (!showLogoutConfirm) return
-    const timeout = setTimeout(() => setShowLogoutConfirm(false), 2500)
+    const timeout = setTimeout(() => setShowLogoutConfirm(false), 2400)
     return () => clearTimeout(timeout)
   }, [showLogoutConfirm])
 
@@ -68,12 +67,12 @@ export default function DashboardHeader({
           ? "Good Evening"
           : "Good Night"
 
-  const getInitials = (name: string): string => {
+  const getInitials = (name: string) => {
     const clean = name.trim().replace(/[^a-zA-Z\s]/g, "")
     const parts = clean.split(/\s+/).filter(Boolean)
     if (parts.length === 0) return "US"
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase()
   }
 
   const handleLogoutClick = useCallback(() => {
@@ -93,167 +92,107 @@ export default function DashboardHeader({
     <motion.header
       initial={{ opacity: 0, y: -12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, ease: [0.23, 1, 0.32, 1] }}
-      className="fixed top-0 left-0 right-0 z-40 pointer-events-none"
-      style={{
-        paddingTop: "env(safe-area-inset-top, 0px)",
-        paddingBottom: "12px",
-      }}
+      transition={{ duration: 0.42, ease: EASE_OUT_SMOOTH }}
+      className="fixed inset-x-0 top-0 z-40 pointer-events-none"
+      style={{ paddingTop: "env(safe-area-inset-top, 0px)", paddingBottom: "12px" }}
     >
       <div
         className={cn(
-          "absolute inset-0 transition-all duration-300 pointer-events-none rounded-b-[2rem] overflow-hidden",
+          "absolute inset-0 rounded-b-[28px] border-b transition-all duration-300 pointer-events-none",
           isScrolled
-            ? "bg-[#0B1120]/90 backdrop-blur-2xl border-b border-white/[0.06]"
-            : "bg-gradient-to-b from-[#0B1120]/30 via-[#0B1120]/20 to-transparent backdrop-blur-sm"
+            ? "border-white/[0.08] bg-[#030712]/90 backdrop-blur-2xl"
+            : "border-transparent bg-[#030712]/68 backdrop-blur-xl"
         )}
       />
 
-      <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/[0.08] to-transparent pointer-events-none" />
-
       <div
-        className="relative flex items-center justify-between px-5 pt-12 pb-3 pointer-events-auto"
+        className="relative flex items-center justify-between px-4 pt-12 pb-2 pointer-events-auto"
         style={{ minHeight: `${HEADER_HEIGHT}px` }}
       >
-        <div className="flex items-center gap-5">
-          <motion.div
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            className="relative shrink-0"
-          >
-            <div
-              className="w-11 h-11 rounded-2xl border border-blue-500/50 flex items-center justify-center overflow-hidden"
-              style={{
-                background: "linear-gradient(135deg,#0a2240,#0d3566)",
-                boxShadow:
-                  "0 0 0 1px rgba(100,180,255,0.15),0 8px 32px rgba(10,48,96,0.6)",
-              }}
-            >
-              <span className="text-[#7dc4f0] font-black text-xl tracking-tight" aria-label={`Avatar ${userName}`}>
+        <div className="flex min-w-0 items-center gap-3.5">
+          <div className="relative shrink-0">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-cyan-400/20 bg-[#0B1528] text-[#38BDF8] shadow-[0_12px_32px_-20px_rgba(56,189,248,0.85)]">
+              <span className="text-lg font-semibold tracking-tight" aria-label={`Avatar ${userName}`}>
                 {getInitials(userName)}
               </span>
             </div>
-            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 animate-pulse rounded-full border-2 border-[#0B1120]" />
-          </motion.div>
+            <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[#030712] bg-emerald-400" />
+          </div>
 
-          <div className="flex flex-col min-w-0">
-            <p className="text-[10px] font-semibold tracking-[0.2em] text-[#64748B] uppercase">
-              {greeting}
-            </p>
-            <h1 className="text-base font-bold text-[#F1F5F9] tracking-tight leading-tight truncate">
-              {userName}
-            </h1>
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">{greeting}</p>
+            <h1 className="truncate text-base font-semibold tracking-tight text-white">{userName}</h1>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-white/[0.03] border border-white/[0.05]">
+        <div className="flex items-center gap-2 rounded-[20px] border border-white/[0.08] bg-[#0B1528]/82 p-1.5 backdrop-blur-xl shadow-[0_10px_30px_-20px_rgba(56,189,248,0.24)]">
           <Link
             href={ROUTES.notifications}
             onClick={triggerHaptic}
-            className="relative flex items-center justify-center w-10 h-9 rounded-xl hover:bg-white/[0.04] active:scale-90 transition-all"
+            className="relative flex h-10 w-10 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/[0.05]"
             aria-label="Notifikasi"
           >
-            <div className="relative z-10">
-              <Bell
-                size={17}
-                className="text-[#94A3B8] hover:text-amber-400 transition-colors duration-200"
-                strokeWidth={1.8}
-              />
-              <AnimatePresence>
-                {notificationCount > 0 && (
-                  <motion.span
-                    initial={{ scale: 0 }}
-                    animate={{ scale: 1 }}
-                    exit={{ scale: 0 }}
-                    className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-1 flex items-center justify-center text-[8px] font-bold text-white bg-amber-400 rounded-full border border-[#0B1120]"
-                  >
-                    {notificationCount > 9 ? "9+" : notificationCount}
-                  </motion.span>
-                )}
-              </AnimatePresence>
-            </div>
+            <Bell size={17} className="text-slate-300" strokeWidth={1.9} />
+            <AnimatePresence>
+              {notificationCount > 0 ? (
+                <motion.span
+                  key={notificationCount}
+                  initial={{ opacity: 0, scale: 0.7 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.7 }}
+                  transition={INTERACTIVE_SPRING}
+                  className="absolute -right-1 -top-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-full border border-[#030712] bg-[#38BDF8] px-1 text-[8px] font-bold text-[#030712]"
+                >
+                  {notificationCount > 9 ? "9+" : notificationCount}
+                </motion.span>
+              ) : null}
+            </AnimatePresence>
           </Link>
 
           <motion.button
+            type="button"
+            whileTap={TAP_FEEDBACK}
+            transition={INTERACTIVE_SPRING}
             onClick={handleLogoutClick}
-            onHoverStart={() => setActiveAction("logout")}
-            onHoverEnd={() => setActiveAction(null)}
-            whileTap={{ scale: 0.88 }}
             disabled={isLoggingOut}
             className={cn(
-              "relative flex items-center justify-center w-10 h-9 rounded-xl transition-colors",
+              "relative flex h-10 w-10 items-center justify-center rounded-xl text-slate-300 transition",
+              showLogoutConfirm ? "bg-red-500/12 text-red-300" : "hover:bg-white/[0.05]",
               isLoggingOut && "cursor-wait"
             )}
             aria-label={showLogoutConfirm ? "Konfirmasi logout" : "Keluar"}
           >
-            {(activeAction === "logout" || showLogoutConfirm) && !isLoggingOut && (
-              <motion.div
-                layoutId="headerPill"
-                className={cn(
-                  "absolute inset-0 rounded-xl border",
-                  showLogoutConfirm
-                    ? "bg-red-400/15 border-red-400/30"
-                    : "bg-amber-400/10 border-amber-400/20"
-                )}
-                transition={{ type: "spring", stiffness: 500, damping: 35 }}
-              />
-            )}
-
-            <div className="relative z-10">
-              <AnimatePresence mode="wait">
-                {isLoggingOut ? (
-                  <motion.div
-                    key="spinner"
-                    animate={{ rotate: 360 }}
-                    transition={{ duration: 0.6, repeat: Infinity, ease: "linear" }}
-                    className="w-4 h-4 border-2 border-slate-600 border-t-amber-400 rounded-full"
-                  />
-                ) : showLogoutConfirm ? (
-                  <motion.div
-                    key="confirm"
-                    initial={{ scale: 0, rotate: -90 }}
-                    animate={{ scale: 1, rotate: 0 }}
-                    exit={{ scale: 0, rotate: 90 }}
-                    transition={{ type: "spring", stiffness: 400, damping: 25 }}
-                  >
-                    <LogOut size={17} className="text-red-400" strokeWidth={2.5} />
-                  </motion.div>
-                ) : (
-                  <motion.div
-                    key="idle"
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.8, opacity: 0 }}
-                  >
-                    <LogOut
-                      size={17}
-                      className={cn(
-                        "transition-colors duration-200",
-                        activeAction === "logout" ? "text-amber-400" : "text-[#64748B]"
-                      )}
-                      strokeWidth={activeAction === "logout" ? 2.5 : 1.8}
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
+            <AnimatePresence mode="wait">
+              {isLoggingOut ? (
+                <motion.div
+                  key="spinner"
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 0.6, repeat: Infinity, ease: "linear" }}
+                  className="h-4 w-4 rounded-full border-2 border-white/[0.16] border-t-[#38BDF8]"
+                />
+              ) : (
+                <motion.div key={showLogoutConfirm ? "confirm" : "idle"} initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }}>
+                  <LogOut size={17} strokeWidth={2.1} className={showLogoutConfirm ? "text-red-300" : "text-slate-300"} />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </motion.button>
         </div>
       </div>
 
       <AnimatePresence>
-        {showLogoutConfirm && !isLoggingOut && (
+        {showLogoutConfirm && !isLoggingOut ? (
           <motion.div
-            initial={{ opacity: 0, y: -8, scale: 0.95 }}
+            initial={{ opacity: 0, y: -8, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -8, scale: 0.95 }}
-            className="absolute right-5 top-[calc(100%-4px)] px-2.5 py-1.5 bg-red-500/20 backdrop-blur-xl border border-red-400/30 rounded-xl text-[10px] font-medium text-red-300 shadow-lg pointer-events-auto"
+            exit={{ opacity: 0, y: -8, scale: 0.96 }}
+            transition={INTERACTIVE_SPRING}
+            className="absolute right-4 top-[calc(100%-2px)] rounded-xl border border-red-500/20 bg-red-500/12 px-3 py-2 text-[10px] font-medium text-red-300 shadow-lg pointer-events-auto"
           >
             Klik lagi untuk keluar
           </motion.div>
-        )}
+        ) : null}
       </AnimatePresence>
     </motion.header>
   )
 }
-

@@ -96,15 +96,72 @@ export interface RecordDebtPaymentResult {
   account_balance?: number | null
 }
 
-type ContactLookupRow = Pick<
-  Database["public"]["Tables"]["contacts"]["Row"],
-  "id" | "name"
->
 
-type AccountLookupRow = Pick<
-  Database["public"]["Tables"]["accounts"]["Row"],
-  "id" | "balance"
->
+
+export interface SetDebtArchiveStateInput {
+  userId: string
+  debtId: string
+  archive: boolean
+}
+
+export interface SetDebtArchiveStateResult {
+  success: boolean
+  debt_id?: string
+  archived_at?: string | null
+}
+
+function normalizeArchiveDebtErrorMessage(error: unknown) {
+  const { code, message, details, hint } = getRpcErrorInfo(error)
+  const combined = [code, message, details, hint].filter(Boolean).join(" | ")
+
+  if (combined.includes("Debt not found")) {
+    return "Catatan hutang/piutang tidak ditemukan"
+  }
+
+  if (combined.includes("User mismatch") || combined.includes("Unauthorized")) {
+    return "Sesi Anda tidak valid. Silakan login ulang"
+  }
+
+  return message || "Gagal mengubah status arsip debt"
+}
+
+export async function setDebtArchiveState({
+  userId,
+  debtId,
+  archive,
+}: SetDebtArchiveStateInput): Promise<SetDebtArchiveStateResult> {
+  const supabase = createClient()
+
+  if (!userId) throw new Error("User tidak valid")
+  if (!debtId) throw new Error("Debt tidak valid")
+
+  const { data, error } = await (supabase.rpc as any)("archive_debt_record", {
+    p_user_id: userId,
+    p_debt_id: debtId,
+    p_archive: archive,
+  })
+
+  if (error) {
+    console.error("[setDebtArchiveState RPC error]", {
+      code: error.code,
+      message: error.message,
+      details: (error as RpcErrorLike).details,
+      hint: (error as RpcErrorLike).hint,
+    })
+
+    if (isMissingRpcError(error, "archive_debt_record")) {
+      throw new Error(
+        "RPC `archive_debt_record` belum tersedia di Supabase. Deploy SQL archive debt version terlebih dahulu."
+      )
+    }
+
+    throw new Error(normalizeArchiveDebtErrorMessage(error))
+  }
+
+  return (data ?? { success: false }) as SetDebtArchiveStateResult
+}
+type ContactLookupRow = Pick<Database["public"]["Tables"]["contacts"]["Row"], "id" | "name">
+type AccountLookupRow = Pick<Database["public"]["Tables"]["accounts"]["Row"], "id" | "balance">
 
 type RpcErrorLike = {
   code?: string
@@ -132,10 +189,8 @@ function getRpcErrorInfo(error: unknown): RpcErrorLike {
 
   return {
     code: "code" in error ? String((error as RpcErrorLike).code || "") : "",
-    message:
-      "message" in error ? String((error as RpcErrorLike).message || "") : "",
-    details:
-      "details" in error ? String((error as RpcErrorLike).details || "") : "",
+    message: "message" in error ? String((error as RpcErrorLike).message || "") : "",
+    details: "details" in error ? String((error as RpcErrorLike).details || "") : "",
     hint: "hint" in error ? String((error as RpcErrorLike).hint || "") : "",
   }
 }
@@ -162,17 +217,11 @@ function normalizeCreateDebtErrorMessage(error: unknown) {
     return "Dana akun Anda tidak mencukupi"
   }
 
-  if (
-    combined.includes("Account not found") ||
-    combined.includes("Akun tidak valid")
-  ) {
+  if (combined.includes("Account not found") || combined.includes("Akun tidak valid")) {
     return "Akun yang dipilih tidak valid"
   }
 
-  if (
-    combined.includes("Contact not found") ||
-    combined.includes("Kontak tidak valid")
-  ) {
+  if (combined.includes("Contact not found") || combined.includes("Kontak tidak valid")) {
     return "Kontak yang dipilih tidak valid"
   }
 
@@ -214,17 +263,11 @@ function normalizeUpdateDebtErrorMessage(error: unknown) {
     return "Catatan hutang/piutang tidak ditemukan"
   }
 
-  if (
-    combined.includes("Account not found") ||
-    combined.includes("Akun tidak valid")
-  ) {
+  if (combined.includes("Account not found") || combined.includes("Akun tidak valid")) {
     return "Akun yang dipilih tidak valid"
   }
 
-  if (
-    combined.includes("Contact not found") ||
-    combined.includes("Kontak tidak valid")
-  ) {
+  if (combined.includes("Contact not found") || combined.includes("Kontak tidak valid")) {
     return "Kontak yang dipilih tidak valid"
   }
 
@@ -235,10 +278,7 @@ function normalizeUpdateDebtErrorMessage(error: unknown) {
     return "Debt lama ini belum bisa diedit penuh. Silakan arsipkan lalu buat ulang"
   }
 
-  if (
-    combined.includes("payment rows exist") ||
-    combined.includes("ledger first")
-  ) {
+  if (combined.includes("payment rows exist") || combined.includes("ledger first")) {
     return "Debt ini perlu diperbaiki dulu sebelum diedit"
   }
 
@@ -272,10 +312,7 @@ function normalizeRecordDebtPaymentErrorMessage(error: unknown) {
     return "Nominal melebihi sisa tagihan"
   }
 
-  if (
-    combined.includes("Payment account not found") ||
-    combined.includes("Account not found")
-  ) {
+  if (combined.includes("Payment account not found") || combined.includes("Account not found")) {
     return "Akun yang dipilih tidak valid"
   }
 
@@ -294,9 +331,6 @@ function normalizeRecordDebtPaymentErrorMessage(error: unknown) {
   return message || "Gagal mencatat pembayaran"
 }
 
-/**
- * Debt creation service (RPC-only).
- */
 export async function createDebtRecord({
   userId,
   type,
@@ -316,9 +350,7 @@ export async function createDebtRecord({
   const supabase = createClient()
 
   if (!userId) throw new Error("User tidak valid")
-  if (type !== "hutang" && type !== "piutang") {
-    throw new Error("Tipe debt tidak valid")
-  }
+  if (type !== "hutang" && type !== "piutang") throw new Error("Tipe debt tidak valid")
 
   const normalizedAmount = normalizePositiveAmount(amount, "Nominal")
   const normalizedContactId = contactId?.trim() || null
@@ -335,19 +367,11 @@ export async function createDebtRecord({
   const safeInstallmentCount = normalizedUseInstallment
     ? Math.max(1, Math.trunc(installmentCount || 1))
     : 1
-
   const safeInterestRate =
-    normalizedUseInstallment && Number.isFinite(interestRate)
-      ? Number(interestRate)
-      : 0
-
+    normalizedUseInstallment && Number.isFinite(interestRate) ? Number(interestRate) : 0
   const safeInstallmentAmount = normalizedUseInstallment
-    ? Math.max(
-        0,
-        Math.round(Number.isFinite(installmentAmount) ? installmentAmount : 0)
-      )
+    ? Math.max(0, Math.round(Number.isFinite(installmentAmount) ? installmentAmount : 0))
     : 0
-
   const safeStartDate = normalizedUseInstallment
     ? startDate || new Date().toISOString().split("T")[0]
     : null
@@ -356,11 +380,10 @@ export async function createDebtRecord({
   let createdContact = false
 
   if (normalizedNewContactName) {
-    const { data: newContact, error: newContactError } = await supabase
-      .from("contacts")
+    const { data: newContact, error: newContactError } = await (supabase.from("contacts") as any)
       .insert({ user_id: userId, name: normalizedNewContactName })
       .select("id, name")
-      .single<ContactLookupRow>()
+      .single()
 
     if (newContactError || !newContact) {
       throw newContactError || new Error("Gagal membuat kontak")
@@ -373,12 +396,11 @@ export async function createDebtRecord({
       throw new Error("Kontak tidak valid")
     }
 
-    const { data: existingContact, error: contactError } = await supabase
-      .from("contacts")
+    const { data: existingContact, error: contactError } = await (supabase.from("contacts") as any)
       .select("id, name")
       .eq("user_id", userId)
       .eq("id", finalContactId)
-      .maybeSingle<ContactLookupRow>()
+      .maybeSingle()
 
     if (contactError) throw contactError
     if (!existingContact) throw new Error("Kontak tidak valid")
@@ -423,10 +445,7 @@ export async function createDebtRecord({
     p_created_at: new Date().toISOString(),
   }
 
-  const { data: rpcData, error: rpcError } = await (supabase.rpc as any)(
-    "create_debt_record",
-    rpcPayload
-  )
+  const { data: rpcData, error: rpcError } = await (supabase.rpc as any)("create_debt_record", rpcPayload)
 
   if (rpcError) {
     console.error("[createDebtRecord RPC error]", {
@@ -455,13 +474,6 @@ export async function createDebtRecord({
   }
 }
 
-/**
- * Debt update service (RPC-only).
- *
- * Rules:
- * - if paid_amount = 0 => full edit allowed
- * - if paid_amount > 0 => metadata-only edit allowed
- */
 export async function updateDebtRecord({
   userId,
   debtId,
@@ -485,11 +497,9 @@ export async function updateDebtRecord({
   const normalizedDebtId = debtId.trim()
   const normalizedContactId = contactId?.trim() || null
   const normalizedAccountId = accountId?.trim() || null
-  const normalizedDescription =
-    description === null ? null : description.trim() || null
+  const normalizedDescription = description === null ? null : description.trim() || null
   const normalizedDueDate = dueDate || null
-  const normalizedInterestRate =
-    interestRate == null ? null : Number(interestRate)
+  const normalizedInterestRate = interestRate == null ? null : Number(interestRate)
   const normalizedInstallmentCount =
     installmentCount == null ? null : Math.max(1, Math.trunc(installmentCount))
 
@@ -554,10 +564,7 @@ export async function updateDebtRecord({
     p_updated_at: new Date().toISOString(),
   }
 
-  const { data: rpcData, error: rpcError } = await (supabase.rpc as any)(
-    "update_debt_record",
-    rpcPayload
-  )
+  const { data: rpcData, error: rpcError } = await (supabase.rpc as any)("update_debt_record", rpcPayload)
 
   if (rpcError) {
     console.error("[updateDebtRecord RPC error]", {
@@ -580,11 +587,6 @@ export async function updateDebtRecord({
   return (rpcData ?? { success: false }) as UpdateDebtRecordResult
 }
 
-/**
- * RPC-only debt payment service.
- *
- * Expects final proper-ledger `record_debt_payment` in Supabase.
- */
 export async function recordDebtPayment({
   userId,
   debtId,

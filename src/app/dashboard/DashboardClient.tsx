@@ -1,12 +1,21 @@
-// src/app/dashboard/DashboardClient.tsx
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
 import toast from "react-hot-toast"
 import Link from "next/link"
-import { Users, ChevronRight, RefreshCw, TrendingUp } from "lucide-react"
+import {
+  AlertTriangle,
+  BellRing,
+  CalendarDays,
+  Clock3,
+  Users,
+  ChevronRight,
+  RefreshCw,
+  TrendingUp,
+  Zap,
+} from "lucide-react"
 
 import { createClient } from "@/lib/supabase/client"
 import DashboardHeader, { HEADER_HEIGHT } from "@/components/DashboardHeader"
@@ -16,13 +25,47 @@ import BottomNav from "@/components/BottomNav"
 import AccountDetailSheet from "@/components/accounts/AccountDetailSheet"
 import QuickActionOverlay from "@/components/accounts/QuickActionOverlay"
 import QuickAddFAB from "@/components/QuickAddFAB"
-import UndoToast from "@/components/UndoToast"
-
-import { restoreAccount } from "@/lib/supabase/queries"
+import { getAlertDeepLink } from "@/lib/alerts"
+import {
+  broadcastUnreadAlertCount,
+  readStoredUnreadAlertCount,
+  subscribeUnreadAlertCount,
+} from "@/lib/alert-sync"
 import { calculateAccountTotals, normalizeAccounts } from "@/lib/account"
 import { ROUTES } from "@/lib/routes"
 import { Account } from "./types"
+import { INTERACTIVE_SPRING, TAP_FEEDBACK, fadeUp } from "@/lib/motion"
 import { formatRupiah, cn } from "@/lib/utils"
+
+interface DebtReminderSummary {
+  overdue: number
+  today: number
+  soon: number
+}
+
+interface DashboardDebtReminderItem {
+  id: string
+  type: "hutang" | "piutang"
+  contactName: string
+  nextInstallmentPeriodNo: number | null
+  nextInstallmentDueDate: string | null
+  nextInstallmentRemainingDue: number
+  reminder: {
+    level: "none" | "overdue" | "today" | "soon" | "upcoming"
+    shortLabel: string | null
+    detailLabel: string | null
+  }
+}
+
+interface DashboardAlertItem {
+  id: string
+  type: string
+  title: string
+  message: string
+  source: string | null
+  created_at: string
+  read_at?: string | null
+}
 
 interface Props {
   userId: string
@@ -30,12 +73,17 @@ interface Props {
   totalWealth: number
   walletTotal: number
   piutang: number
+  hutang: number
   accounts: Account[]
+  debtReminderSummary: DebtReminderSummary
+  urgentDebtReminders: DashboardDebtReminderItem[]
+  activeAlerts: DashboardAlertItem[]
+  unreadAlertCount: number
 }
 
 const triggerHaptic = (style: "light" | "medium" | "success" = "light") => {
   if (typeof navigator !== "undefined" && navigator.vibrate) {
-    const patterns = {
+    const patterns: Record<string, number | number[]> = {
       light: 8,
       medium: 15,
       success: [10, 50, 10],
@@ -45,13 +93,402 @@ const triggerHaptic = (style: "light" | "medium" | "success" = "light") => {
   }
 }
 
+
+interface SmartInsightCenterProps {
+  debtReminderSummary: DebtReminderSummary
+  urgentDebtReminders: DashboardDebtReminderItem[]
+  activeAlerts: DashboardAlertItem[]
+  unreadAlertCount: number
+  onNavigate: (href: string) => void
+}
+
+type FinancialPeriod = "7D" | "30D" | "3B"
+
+interface TrendTransactionRow {
+  type: string | null
+  amount: number | string | null
+  created_at: string | null
+}
+
+interface TrendDebtRow {
+  id: string
+  type: string | null
+  amount: number | string | null
+  paid_principal?: number | string | null
+  disbursed_at?: string | null
+  created_at?: string | null
+}
+
+interface TrendDebtPaymentRow {
+  debt_id: string | null
+  principal_amount: number | string | null
+  paid_at: string | null
+}
+
+function buildFallbackTrendPoints(
+  period: FinancialPeriod,
+  totalWealth: number,
+  walletTotal: number,
+  piutang: number,
+  hutang: number
+) {
+  const anchor = Math.max(totalWealth, walletTotal, piutang, hutang, 1)
+
+  if (period === "3B") {
+    return [
+      Math.max(anchor * 0.82, totalWealth * 0.86),
+      Math.max(anchor * 0.88, totalWealth * 0.92),
+      Math.max(anchor * 0.94, totalWealth),
+    ]
+  }
+
+  const length = period === "30D" ? 30 : 7
+  return Array.from({ length }, (_, index) => {
+    const step = index / Math.max(length - 1, 1)
+    return Math.max(anchor * (0.74 + step * 0.2), totalWealth * (0.8 + step * 0.2))
+  })
+}
+
+function toDayKey(date: Date) {
+  return date.toISOString().slice(0, 10)
+}
+
+function toMonthKey(date: Date) {
+  return date.toISOString().slice(0, 7)
+}
+
+function getDebtPrincipalBasisDelta(type: string | null, principalAmount: number) {
+  if (type === "piutang") return principalAmount
+  if (type === "hutang") return -principalAmount
+  return 0
+}
+
+function buildDailyWealthTrendPoints(
+  currentWealth: number,
+  rows: TrendTransactionRow[],
+  debtRows: TrendDebtRow[],
+  paymentRows: TrendDebtPaymentRow[],
+  days: number
+) {
+  const today = new Date()
+  const dayKeys = Array.from({ length: days }, (_, index) => {
+    const date = new Date(today)
+    date.setDate(today.getDate() - (days - 1 - index))
+    return toDayKey(date)
+  })
+
+  const keySet = new Set(dayKeys)
+  const deltaMap = new Map<string, number>()
+  const debtTypeMap = new Map(debtRows.map((row) => [row.id, row.type]))
+
+  rows.forEach((row) => {
+    if (!row.created_at) return
+    const key = row.created_at.slice(0, 10)
+    if (!keySet.has(key)) return
+
+    const amount = Number(row.amount) || 0
+    let delta = 0
+
+    if (row.type === "income") delta = amount
+    else if (row.type === "expense") delta = -amount
+
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + delta)
+  })
+
+  debtRows.forEach((row) => {
+    const eventDate = row.disbursed_at ?? row.created_at ?? null
+    if (!eventDate) return
+
+    const key = eventDate.slice(0, 10)
+    if (!keySet.has(key)) return
+
+    const principalDelta = getDebtPrincipalBasisDelta(row.type, Number(row.amount) || 0)
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + principalDelta)
+  })
+
+  paymentRows.forEach((row) => {
+    if (!row.paid_at || !row.debt_id) return
+    const key = row.paid_at.slice(0, 10)
+    if (!keySet.has(key)) return
+
+    const debtType = debtTypeMap.get(row.debt_id) ?? null
+    const principalAmount = Number(row.principal_amount) || 0
+    const principalDelta = debtType === "piutang" ? -principalAmount : debtType === "hutang" ? principalAmount : 0
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + principalDelta)
+  })
+
+  const points = new Array<number>(dayKeys.length)
+  let cursor = currentWealth
+
+  for (let index = dayKeys.length - 1; index >= 0; index -= 1) {
+    const key = dayKeys[index]
+    points[index] = cursor
+    cursor -= deltaMap.get(key) ?? 0
+  }
+
+  return points
+}
+
+function buildMonthlyWealthTrendPoints(
+  currentWealth: number,
+  rows: TrendTransactionRow[],
+  debtRows: TrendDebtRow[],
+  paymentRows: TrendDebtPaymentRow[]
+) {
+  const now = new Date()
+  const monthKeys = Array.from({ length: 3 }, (_, index) => {
+    const date = new Date(now.getFullYear(), now.getMonth() - (2 - index), 1)
+    return toMonthKey(date)
+  })
+
+  const keySet = new Set(monthKeys)
+  const deltaMap = new Map<string, number>()
+  const debtTypeMap = new Map(debtRows.map((row) => [row.id, row.type]))
+
+  rows.forEach((row) => {
+    if (!row.created_at) return
+    const key = row.created_at.slice(0, 7)
+    if (!keySet.has(key)) return
+
+    const amount = Number(row.amount) || 0
+    let delta = 0
+
+    if (row.type === "income") delta = amount
+    else if (row.type === "expense") delta = -amount
+
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + delta)
+  })
+
+  debtRows.forEach((row) => {
+    const eventDate = row.disbursed_at ?? row.created_at ?? null
+    if (!eventDate) return
+
+    const key = eventDate.slice(0, 7)
+    if (!keySet.has(key)) return
+
+    const principalDelta = getDebtPrincipalBasisDelta(row.type, Number(row.amount) || 0)
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + principalDelta)
+  })
+
+  paymentRows.forEach((row) => {
+    if (!row.paid_at || !row.debt_id) return
+    const key = row.paid_at.slice(0, 7)
+    if (!keySet.has(key)) return
+
+    const debtType = debtTypeMap.get(row.debt_id) ?? null
+    const principalAmount = Number(row.principal_amount) || 0
+    const principalDelta = debtType === "piutang" ? -principalAmount : debtType === "hutang" ? principalAmount : 0
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + principalDelta)
+  })
+
+  const points = new Array<number>(monthKeys.length)
+  let cursor = currentWealth
+
+  for (let index = monthKeys.length - 1; index >= 0; index -= 1) {
+    const key = monthKeys[index]
+    points[index] = cursor
+    cursor -= deltaMap.get(key) ?? 0
+  }
+
+  return points
+}
+
+function SmartInsightCenter({
+  debtReminderSummary,
+  urgentDebtReminders,
+  activeAlerts,
+  unreadAlertCount,
+  onNavigate,
+}: SmartInsightCenterProps) {
+  const totalCritical = debtReminderSummary.overdue + debtReminderSummary.today + unreadAlertCount
+
+  type Severity = "error" | "warning" | "info"
+
+  const criticalRows = useMemo(() => {
+    const rows: Array<{
+      id: string
+      label: string
+      sublabel: string
+      severity: Severity
+      href: string
+    }> = []
+
+    const topDebt = urgentDebtReminders.find(
+      (debt) => debt.reminder.level === "overdue" || debt.reminder.level === "today"
+    )
+
+    if (topDebt) {
+      rows.push({
+        id: topDebt.id,
+        label: topDebt.contactName,
+        sublabel:
+          topDebt.reminder.detailLabel ?? formatRupiah(topDebt.nextInstallmentRemainingDue),
+        severity: topDebt.reminder.level === "overdue" ? "error" : "warning",
+        href: `${ROUTES.debts}?debt=${topDebt.id}`,
+      })
+    }
+
+    const topAlert = activeAlerts.find((alert) => !alert.read_at)
+    if (topAlert && rows.length < 2) {
+      rows.push({
+        id: `alert-${topAlert.id}`,
+        label: topAlert.title,
+        sublabel:
+          topAlert.message.length > 55 ? `${topAlert.message.slice(0, 55)}…` : topAlert.message,
+        severity:
+          topAlert.type === "critical"
+            ? "error"
+            : topAlert.type === "warning"
+              ? "warning"
+              : "info",
+        href: getAlertDeepLink(topAlert.source) ?? ROUTES.notifications,
+      })
+    }
+
+    return rows
+  }, [urgentDebtReminders, activeAlerts])
+
+  const severityRow: Record<Severity, string> = {
+    error: "border-rose-500/15 hover:border-rose-500/30",
+    warning: "border-amber-500/15 hover:border-amber-500/25",
+    info: "border-cyan-500/15 hover:border-cyan-500/25",
+  }
+
+  const severityDot: Record<Severity, string> = {
+    error: "bg-rose-400",
+    warning: "bg-amber-400",
+    info: "bg-cyan-400",
+  }
+
+  const debtStats = [
+    {
+      count: debtReminderSummary.overdue,
+      label: "Telat",
+      Icon: AlertTriangle,
+      active: "text-rose-300 bg-rose-500/10 border-rose-500/20",
+    },
+    {
+      count: debtReminderSummary.today,
+      label: "Hari ini",
+      Icon: Clock3,
+      active: "text-amber-300 bg-amber-500/10 border-amber-500/20",
+    },
+    {
+      count: debtReminderSummary.soon,
+      label: "Dekat",
+      Icon: CalendarDays,
+      active: "text-cyan-300 bg-cyan-500/10 border-cyan-500/20",
+    },
+  ] as const
+
+  return (
+    <motion.div
+      whileTap={TAP_FEEDBACK}
+      transition={INTERACTIVE_SPRING}
+      className="rounded-[24px] bg-white/[0.04] backdrop-blur-xl border border-white/[0.08] overflow-hidden"
+    >
+      <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-white/[0.05]">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-400/20 flex items-center justify-center shrink-0">
+            <Zap size={14} className="text-cyan-300" />
+          </div>
+          <div>
+            <p className="text-white text-[13px] font-semibold tracking-tight">Smart Insight</p>
+            <p className="text-slate-500 text-[10px]">Prioritas &amp; alert terkini</p>
+          </div>
+        </div>
+
+        {totalCritical > 0 ? (
+          <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-rose-500 flex items-center justify-center text-[10px] font-bold text-white tabular-nums">
+            {totalCritical}
+          </span>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <p className="text-emerald-400 text-[10px] font-medium">Aman</p>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap px-4 py-3">
+        {debtStats.map(({ count, label, Icon, active }) => (
+          <button
+            key={label}
+            type="button"
+            onClick={() => onNavigate(ROUTES.debts)}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-[10px] font-bold tabular-nums transition-colors",
+              count > 0 ? active : "text-slate-600 bg-white/[0.02] border-white/[0.06]"
+            )}
+          >
+            <Icon size={9} />
+            <span>{count}</span>
+            <span>{label}</span>
+          </button>
+        ))}
+
+        {unreadAlertCount > 0 && (
+          <button
+            type="button"
+            onClick={() => onNavigate(ROUTES.notifications)}
+            className="ml-auto flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border bg-violet-500/10 border-violet-500/20 text-violet-300 text-[10px] font-bold tabular-nums transition-colors hover:border-violet-400/40"
+          >
+            <BellRing size={9} />
+            <span>{unreadAlertCount} alert</span>
+          </button>
+        )}
+      </div>
+
+      <div className="px-4 pb-4 space-y-2">
+        {criticalRows.length > 0 ? (
+          criticalRows.map((row) => (
+            <button
+              key={row.id}
+              type="button"
+              onClick={() => {
+                triggerHaptic("light")
+                onNavigate(row.href)
+              }}
+              className={cn(
+                "w-full flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-2xl border bg-white/[0.02] transition-colors",
+                severityRow[row.severity]
+              )}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", severityDot[row.severity])} />
+                <div className="min-w-0 text-left">
+                  <p className="text-white text-[12px] font-semibold tracking-tight truncate">{row.label}</p>
+                  <p className="text-slate-400 text-[10px] truncate mt-0.5">{row.sublabel}</p>
+                </div>
+              </div>
+              <ChevronRight size={12} className="text-slate-500 shrink-0" />
+            </button>
+          ))
+        ) : (
+          <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-emerald-500/[0.05] border border-emerald-500/15">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            <p className="text-emerald-300 text-[12px] font-medium">
+              Tidak ada cicilan mendesak atau alert aktif
+            </p>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  )
+}
+
 export default function DashboardClient({
   userId,
   userName,
   totalWealth: initialTotalWealth,
   walletTotal: initialWalletTotal,
   piutang: initialPiutang,
+  hutang: initialHutang,
   accounts: initialAccounts,
+  debtReminderSummary,
+  urgentDebtReminders,
+  activeAlerts,
+  unreadAlertCount,
 }: Props) {
   const router = useRouter()
   const supabase = createClient()
@@ -60,12 +497,120 @@ export default function DashboardClient({
   const [totalWealth, setTotalWealth] = useState(initialTotalWealth)
   const [walletTotal, setWalletTotal] = useState(initialWalletTotal)
   const [piutang, setPiutang] = useState(initialPiutang)
+  const [hutang, setHutang] = useState(initialHutang)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [overlayPos, setOverlayPos] = useState<{ x: number; y: number } | null>(null)
-  const [undoData, setUndoData] = useState<{ accountId: string; accountName: string } | null>(null)
+  const [liveUnreadAlertCount, setLiveUnreadAlertCount] = useState(unreadAlertCount)
+  const [hasAlertCountBootstrapped, setHasAlertCountBootstrapped] = useState(false)
+  const [selectedTrendPeriod, setSelectedTrendPeriod] = useState<FinancialPeriod>("7D")
+  const [trendPoints, setTrendPoints] = useState<number[]>(() =>
+    buildFallbackTrendPoints("7D", initialTotalWealth, initialWalletTotal, initialPiutang, initialHutang)
+  )
+  const [isChartLoading, setIsChartLoading] = useState(false)
+  const hydratedUnreadCountFromStorageRef = useRef(false)
+
+  useEffect(() => {
+    const storedUnreadCount = readStoredUnreadAlertCount()
+
+    if (storedUnreadCount !== null && storedUnreadCount !== unreadAlertCount) {
+      hydratedUnreadCountFromStorageRef.current = true
+      setLiveUnreadAlertCount(storedUnreadCount)
+      setHasAlertCountBootstrapped(true)
+      return
+    }
+
+    setLiveUnreadAlertCount(unreadAlertCount)
+    setHasAlertCountBootstrapped(true)
+  }, [unreadAlertCount])
+
+  useEffect(() => {
+    if (!hasAlertCountBootstrapped) return
+
+    if (hydratedUnreadCountFromStorageRef.current) {
+      hydratedUnreadCountFromStorageRef.current = false
+      return
+    }
+
+    setLiveUnreadAlertCount(unreadAlertCount)
+  }, [hasAlertCountBootstrapped, unreadAlertCount])
+
+  useEffect(() => {
+    return subscribeUnreadAlertCount((nextUnreadCount) => {
+      setLiveUnreadAlertCount(nextUnreadCount)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!hasAlertCountBootstrapped) return
+    broadcastUnreadAlertCount(liveUnreadAlertCount)
+  }, [hasAlertCountBootstrapped, liveUnreadAlertCount])
+
+  useEffect(() => {
+    document.documentElement.classList.add("dashboard-scrollbar-hide")
+    document.body.classList.add("dashboard-scrollbar-hide")
+
+    return () => {
+      document.documentElement.classList.remove("dashboard-scrollbar-hide")
+      document.body.classList.remove("dashboard-scrollbar-hide")
+    }
+  }, [])
+
+  const fetchTrendPoints = useCallback(
+    async (period: FinancialPeriod, basisWealth = totalWealth) => {
+      setIsChartLoading(true)
+
+      try {
+        const days = period === "30D" ? 30 : 7
+        const cutoffDate = new Date()
+        cutoffDate.setDate(cutoffDate.getDate() - (period === "3B" ? 92 : days - 1))
+
+        const [transactionRes, debtRes, paymentRes] = await Promise.all([
+          supabase
+            .from("transactions")
+            .select("type, amount, created_at")
+            .eq("user_id", userId)
+            .gte("created_at", cutoffDate.toISOString())
+            .order("created_at", { ascending: true }),
+          (supabase.from("debts") as any)
+            .select("id, type, amount, paid_principal, disbursed_at, created_at")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: true }),
+          (supabase.from("debt_payments") as any)
+            .select("debt_id, principal_amount, paid_at")
+            .eq("user_id", userId)
+            .gte("paid_at", cutoffDate.toISOString())
+            .order("paid_at", { ascending: true }),
+        ])
+
+        if (transactionRes.error) throw transactionRes.error
+        if (debtRes.error) throw debtRes.error
+        if (paymentRes.error) throw paymentRes.error
+
+        const normalizedTransactions = (transactionRes.data ?? []) as TrendTransactionRow[]
+        const normalizedDebts = (debtRes.data ?? []) as TrendDebtRow[]
+        const normalizedPayments = (paymentRes.data ?? []) as TrendDebtPaymentRow[]
+
+        const nextPoints =
+          period === "3B"
+            ? buildMonthlyWealthTrendPoints(basisWealth, normalizedTransactions, normalizedDebts, normalizedPayments)
+            : buildDailyWealthTrendPoints(basisWealth, normalizedTransactions, normalizedDebts, normalizedPayments, days)
+
+        setTrendPoints(nextPoints)
+      } catch {
+        setTrendPoints(buildFallbackTrendPoints(period, basisWealth, walletTotal, piutang, hutang))
+      } finally {
+        setIsChartLoading(false)
+      }
+    },
+    [hutang, piutang, supabase, totalWealth, userId, walletTotal]
+  )
+
+  useEffect(() => {
+    void fetchTrendPoints(selectedTrendPeriod)
+  }, [fetchTrendPoints, selectedTrendPeriod])
 
   const handleSync = useCallback(async () => {
     if (isSyncing) return
@@ -94,35 +639,55 @@ export default function DashboardClient({
       if (accountError) throw accountError
 
       const nextAccounts = normalizeAccounts(rawAccounts ?? []) as Account[]
-      const totals = calculateAccountTotals(nextAccounts)
+      const accountTotals = calculateAccountTotals(nextAccounts)
+      const nextLiquidTotal = accountTotals.totalWealth
 
-      const { data: piutangRows, error: piutangError } = await supabase
-        .from("transactions")
-        .select("amount")
+      const { data: debtRows, error: debtError } = await supabase
+        .from("debts")
+        .select("type, amount, paid_principal, status")
         .eq("user_id", user.id)
-        .eq("type", "piutang")
 
-      if (piutangError) throw piutangError
+      if (debtError) throw debtError
 
-      const nextPiutang = (piutangRows ?? []).reduce((sum, row: any) => sum + (Number(row.amount) || 0), 0)
+      const nextPiutang = (debtRows ?? []).reduce((sum, row: any) => {
+        if (row.type !== "piutang") return sum
+        return sum + Math.max(0, (Number(row.amount) || 0) - (Number(row.paid_principal) || 0))
+      }, 0)
+
+      const nextHutang = (debtRows ?? []).reduce((sum, row: any) => {
+        if (row.type !== "hutang") return sum
+        return sum + Math.max(0, (Number(row.amount) || 0) - (Number(row.paid_principal) || 0))
+      }, 0)
+
+      const nextWealthBasis = nextLiquidTotal + nextPiutang - nextHutang
 
       setAccounts(nextAccounts)
-      setTotalWealth(totals.totalWealth)
-      setWalletTotal(totals.walletTotal)
+      setTotalWealth(nextWealthBasis)
+      setWalletTotal(nextLiquidTotal)
       setPiutang(nextPiutang)
+      setHutang(nextHutang)
+      void fetchTrendPoints(selectedTrendPeriod, nextWealthBasis)
 
       triggerHaptic("success")
       toast.success("Data diperbarui! ✨", {
-        style: { background: "#0B1120", color: "#F1F5F9", border: "1px solid #10B981" },
+        style: {
+          background: "#0B1120",
+          color: "#F1F5F9",
+          border: "1px solid #10B981",
+        },
       })
     } catch {
       toast.error("Gagal sync", {
-        style: { background: "#0B1120", color: "#F1F5F9", border: "1px solid #F43F5E" },
+        style: {
+          background: "#0B1120",
+          color: "#F1F5F9",
+          border: "1px solid #F43F5E",
+        },
       })
     } finally {
       setIsSyncing(false)
     }
-  }, [isSyncing, router, supabase])
+  }, [fetchTrendPoints, isSyncing, router, selectedTrendPeriod, supabase])
 
   const handleLogout = useCallback(async () => {
     triggerHaptic("medium")
@@ -160,35 +725,6 @@ export default function DashboardClient({
     setSelectedAccount(null)
   }, [])
 
-  const handleAccountDeleted = useCallback((deletedId: string, accountName: string) => {
-    triggerHaptic("light")
-
-    setAccounts((prev) => {
-      const next = prev.filter((account) => account.id !== deletedId)
-      const totals = calculateAccountTotals(next)
-
-      setTotalWealth(totals.totalWealth)
-      setWalletTotal(totals.walletTotal)
-
-      return next
-    })
-
-    setUndoData({ accountId: deletedId, accountName })
-  }, [])
-
-  const handleRestore = useCallback(async () => {
-    if (!undoData) return
-
-    try {
-      await restoreAccount(undoData.accountId)
-      router.refresh()
-      setUndoData(null)
-      triggerHaptic("success")
-    } catch {
-      toast.error("Gagal memulihkan akun")
-    }
-  }, [router, undoData])
-
   const handlePullToRefresh = useCallback(async () => {
     if (isRefreshing) return
 
@@ -200,11 +736,11 @@ export default function DashboardClient({
 
   if (accounts.length === 0 && isSyncing) {
     return (
-      <div className="min-h-screen bg-[#0B1120] flex items-center justify-center">
+      <div className="min-h-screen bg-[#030712] flex items-center justify-center">
         <motion.div
           animate={{ scale: [1, 1.05, 1] }}
           transition={{ duration: 1.5, repeat: Infinity }}
-          className="w-16 h-16 rounded-2xl bg-[#151E32] border border-white/[0.06] flex items-center justify-center"
+          className="w-16 h-16 rounded-2xl bg-[#0B1528] border border-white/[0.06] flex items-center justify-center"
         >
           <RefreshCw className="animate-spin text-amber-400" size={24} />
         </motion.div>
@@ -222,65 +758,47 @@ export default function DashboardClient({
             exit={{ opacity: 0, y: -20 }}
             className="fixed top-0 left-0 right-0 z-50 flex justify-center pt-20 pointer-events-none"
           >
-            <div className="px-4 py-2 rounded-full bg-[#151E32] border border-white/[0.08] backdrop-blur-xl flex items-center gap-2 shadow-xl">
-              <RefreshCw size={14} className="text-amber-400 animate-spin" />
-              <span className="text-xs font-bold text-[#F1F5F9]">Memuat...</span>
+            <div className="px-4 py-2 rounded-full bg-[#0B1528] border border-white/[0.08] backdrop-blur-xl flex items-center gap-2 shadow-xl">
+              <RefreshCw className="text-amber-400 animate-spin" size={14} />
+              <span className="text-xs font-medium text-slate-200">Memuat...</span>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
       <DashboardHeader
+        isLoggingOut={isLoggingOut}
+        notificationCount={liveUnreadAlertCount}
+        onLogout={handleLogout}
         userId={userId}
         userName={userName}
-        onLogout={handleLogout}
-        isLoggingOut={isLoggingOut}
       />
 
       <main
-        className="min-h-screen relative"
+        className="min-h-screen bg-[#030712]"
         style={{
-          background: "linear-gradient(160deg, #0d1f3c 0%, #080e1a 50%, #0B1120 100%)",
           touchAction: "pan-y",
           paddingBottom: "calc(env(safe-area-inset-bottom) + 5rem)",
         }}
       >
-        <div
-          className="pointer-events-none"
-          style={{
-            height: `${HEADER_HEIGHT + 25 + (typeof window !== "undefined" ? window.visualViewport?.offsetTop || 0 : 0)}px`,
-          }}
-          aria-hidden="true"
-        />
+        <div style={{ height: `${HEADER_HEIGHT + 55}px` }} aria-hidden="true" />
 
-        <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
-          <div className="absolute -top-40 -right-40 w-96 h-96 rounded-full bg-blue-600/10 blur-[120px]" />
-          <div className="absolute top-1/3 -left-32 w-72 h-72 rounded-full bg-amber-500/[0.06] blur-[100px]" />
-          <div className="absolute bottom-20 right-10 w-56 h-56 rounded-full bg-violet-600/[0.07] blur-[80px]" />
-        </div>
-
-        <div className="relative z-10 px-5">
-          <motion.div
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.55, delay: 0.12, ease: [0.23, 1, 0.32, 1] }}
-            className="mt-4"
-          >
+        <div className="relative z-10 px-4 space-y-4 pb-4">
+          <motion.div {...fadeUp(0.12)}>
             <BalanceCard
-              totalWealth={totalWealth}
-              walletTotal={walletTotal}
-              piutang={piutang}
-              onSync={handleSync}
+              hutang={hutang}
+              isChartLoading={isChartLoading}
               isSyncing={isSyncing}
+              onPeriodChange={(period) => setSelectedTrendPeriod(period)}
+              onSync={handleSync}
+              piutang={piutang}
+              totalWealth={totalWealth}
+              trendPoints={trendPoints}
+              walletTotal={walletTotal}
             />
           </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.22, ease: [0.23, 1, 0.32, 1] }}
-            className="mt-7"
-          >
+          <motion.div {...fadeUp(0.20)}>
             <AccountCards
               accounts={accounts}
               onCardClick={handleCardClick}
@@ -288,86 +806,81 @@ export default function DashboardClient({
             />
           </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.3, ease: [0.23, 1, 0.32, 1] }}
-            className="mt-5"
-          >
+          <motion.div {...fadeUp(0.28)}>
             <Link href={ROUTES.debts} className="block group">
               <motion.div
-                whileTap={{ scale: 0.98 }}
-                className={cn(
-                  "rounded-2xl p-4 border transition-all",
-                  "bg-[#151E32] border-white/[0.06] hover:bg-[#1E293B] active:scale-[0.98]"
-                )}
+                whileTap={TAP_FEEDBACK}
+                transition={INTERACTIVE_SPRING}
+                className="rounded-[24px] p-4 bg-white/[0.04] backdrop-blur-xl border border-white/[0.08] hover:border-white/[0.14] transition-colors"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-violet-500/20 border border-violet-400/20 flex items-center justify-center">
-                      <Users size={18} className="text-violet-400" />
+                    <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-400/20 flex items-center justify-center">
+                      <Users className="text-violet-400" size={17} />
                     </div>
                     <div>
-                      <p className="text-[#F1F5F9] text-sm font-bold">Hutang &amp; Piutang</p>
-                      <p className="text-[#64748B] text-[11px]">Kelola catatan pinjaman</p>
+                      <p className="text-white text-sm font-semibold tracking-tight">Hutang &amp; Piutang</p>
+                      <p className="text-slate-400 text-[11px]">Kelola catatan pinjaman</p>
                     </div>
                   </div>
-
                   <div className="flex items-center gap-3">
                     {piutang > 0 && (
                       <div className="text-right">
-                        <p className="text-emerald-400 text-xs font-bold tabular-nums">{formatRupiah(piutang)}</p>
-                        <p className="text-[#475569] text-[9px]">piutang</p>
+                        <p className="text-emerald-400 text-xs font-medium tabular-nums tracking-tight">
+                          {formatRupiah(piutang)}
+                        </p>
+                        <p className="text-slate-500 text-[9px]">piutang</p>
                       </div>
                     )}
-                    <ChevronRight size={16} className="text-[#475569] group-hover:translate-x-0.5 transition-transform" />
+                    <ChevronRight
+                      className="text-slate-500 group-hover:translate-x-0.5 transition-transform"
+                      size={16}
+                    />
                   </div>
                 </div>
               </motion.div>
             </Link>
           </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.35, ease: [0.23, 1, 0.32, 1] }}
-            className="mt-4"
-          >
+          <motion.div {...fadeUp(0.36)}>
+            <SmartInsightCenter
+              activeAlerts={activeAlerts}
+              debtReminderSummary={debtReminderSummary}
+              onNavigate={(href) => {
+                triggerHaptic("light")
+                router.push(href)
+              }}
+              unreadAlertCount={liveUnreadAlertCount}
+              urgentDebtReminders={urgentDebtReminders}
+            />
+          </motion.div>
+
+          <motion.div {...fadeUp(0.44)}>
             <Link href={ROUTES.analytics} className="block group">
               <motion.div
-                whileTap={{ scale: 0.98 }}
-                className={cn(
-                  "relative overflow-hidden rounded-2xl p-4 border transition-all",
-                  "bg-gradient-to-br from-[#151E32] to-[#1a2744] border-cyan-400/20",
-                  "hover:border-cyan-400/40 hover:shadow-lg hover:shadow-cyan-500/10 active:scale-[0.98]"
-                )}
+                whileTap={TAP_FEEDBACK}
+                transition={INTERACTIVE_SPRING}
+                className="rounded-[24px] p-4 bg-white/[0.04] backdrop-blur-xl border border-cyan-400/15 hover:border-cyan-400/30 transition-colors"
               >
-                <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full bg-cyan-500/10 blur-3xl pointer-events-none" />
-                <div className="absolute -bottom-10 -left-10 w-32 h-32 rounded-full bg-violet-500/10 blur-3xl pointer-events-none" />
-
-                <div className="relative flex items-center justify-between">
+                <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-cyan-500/30 to-blue-600/30 border border-cyan-400/30 flex items-center justify-center">
-                      <TrendingUp size={18} className="text-cyan-400" />
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-600/20 border border-cyan-400/25 flex items-center justify-center">
+                      <TrendingUp className="text-cyan-400" size={17} />
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <p className="text-[#F1F5F9] text-sm font-bold">Analitik Premium</p>
-                        <span className="px-1.5 py-0.5 rounded-md bg-gradient-to-r from-cyan-500/20 to-blue-500/20 border border-cyan-400/30 text-[9px] font-bold text-cyan-300 uppercase tracking-wider">
+                        <p className="text-white text-sm font-semibold tracking-tight">Analitik Premium</p>
+                        <span className="px-1.5 py-0.5 rounded-md bg-cyan-500/10 border border-cyan-400/25 text-[9px] font-bold text-cyan-300 uppercase tracking-wider">
                           PRO
                         </span>
                       </div>
-                      <p className="text-[#64748B] text-[11px]">Prediksi arus kas &amp; kekayaan bersih</p>
+                      <p className="text-slate-400 text-[11px]">Prediksi arus kas &amp; kekayaan bersih</p>
                     </div>
                   </div>
-
-                  <div className="flex items-center gap-2">
-                    <div className="hidden sm:flex flex-col items-end">
-                      <p className="text-cyan-400 text-xs font-bold">Lihat Insight</p>
-                      <p className="text-[#475569] text-[9px]">30 hari ke depan</p>
-                    </div>
-                    <ChevronRight size={16} className="text-cyan-400/60 group-hover:translate-x-0.5 group-hover:text-cyan-400 transition-all" />
-                  </div>
+                  <ChevronRight
+                    className="text-slate-500 group-hover:translate-x-0.5 group-hover:text-cyan-400 transition-all"
+                    size={16}
+                  />
                 </div>
               </motion.div>
             </Link>
@@ -377,13 +890,15 @@ export default function DashboardClient({
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.5, type: "spring", stiffness: 300, damping: 25 }}
-              className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/[0.06] p-5 flex items-center gap-4"
+              transition={{ delay: 0.5, ...INTERACTIVE_SPRING }}
+              className="rounded-[24px] border border-amber-500/15 bg-amber-500/[0.05] p-5 flex items-center gap-4"
             >
-              <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center shrink-0 text-lg">💡</div>
+              <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center shrink-0 text-lg">
+                💡
+              </div>
               <div>
-                <p className="text-[#F1F5F9] text-sm font-bold">Belum ada akun</p>
-                <p className="text-amber-400/70 text-xs mt-0.5">Tekan tombol + untuk mulai</p>
+                <p className="text-white text-sm font-semibold">Belum ada akun</p>
+                <p className="text-amber-400/70 text-xs mt-0.5">Tekan tombol + untuk memulai</p>
               </div>
             </motion.div>
           )}
@@ -405,16 +920,11 @@ export default function DashboardClient({
         position={overlayPos}
       />
 
-      {undoData && (
-        <UndoToast
-          message={`"${undoData.accountName}" telah dihapus`}
-          onUndo={handleRestore}
-          duration={5000}
-          onExpired={() => setUndoData(null)}
-        />
-      )}
-
-      <QuickAddFAB accounts={accounts} userId={userId} onSuccess={handlePullToRefresh} />
+      <QuickAddFAB
+        accounts={accounts}
+        onSuccess={handlePullToRefresh}
+        userId={userId}
+      />
     </>
   )
 }

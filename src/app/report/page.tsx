@@ -2,12 +2,33 @@ import Link from "next/link"
 import { redirect } from "next/navigation"
 import { ArrowLeft, ArrowUpRight, CalendarDays, Receipt, Wallet } from "lucide-react"
 
+import type { Database } from "@/lib/supabase/database.types"
 import { ROUTES } from "@/lib/routes"
 import { createServerSupabaseClient } from "@/lib/supabase/server"
 import { formatRupiah, formatRupiahCompact } from "@/lib/utils"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+
+type AccountReportRow = Pick<
+  Database["public"]["Tables"]["accounts"]["Row"],
+  "id" | "name" | "balance"
+>
+
+type TransactionMonthRow = Pick<
+  Database["public"]["Tables"]["transactions"]["Row"],
+  "id" | "type" | "amount" | "created_at"
+>
+
+type TransactionRecentRow = Pick<
+  Database["public"]["Tables"]["transactions"]["Row"],
+  "id" | "type" | "category" | "amount" | "note" | "created_at"
+>
+
+type DebtReportRow = Pick<
+  Database["public"]["Tables"]["debts"]["Row"],
+  "id" | "type" | "amount" | "paid_amount" | "status" | "due_date"
+>
 
 function getMonthRange() {
   const now = new Date()
@@ -35,7 +56,7 @@ export default async function ReportPage() {
 
   const monthRange = getMonthRange()
 
-  const [{ data: accounts }, { data: monthTransactions }, { data: recentTransactions }, { data: debts }] =
+  const [{ data: rawAccounts }, { data: rawMonthTransactions }, { data: rawRecentTransactions }, { data: rawDebts }] =
     await Promise.all([
       supabase
         .from("accounts")
@@ -61,19 +82,24 @@ export default async function ReportPage() {
         .eq("user_id", user.id),
     ])
 
-  const totalBalance = (accounts ?? []).reduce((sum, account) => sum + (Number(account.balance) || 0), 0)
+  const accounts = (rawAccounts ?? []) as AccountReportRow[]
+  const monthTransactions = (rawMonthTransactions ?? []) as TransactionMonthRow[]
+  const recentTransactions = (rawRecentTransactions ?? []) as TransactionRecentRow[]
+  const debts = (rawDebts ?? []) as DebtReportRow[]
 
-  const monthlyIncome = (monthTransactions ?? []).reduce((sum, tx) => {
+  const totalBalance = accounts.reduce((sum, account) => sum + (Number(account.balance) || 0), 0)
+
+  const monthlyIncome = monthTransactions.reduce((sum, tx) => {
     return tx.type === "income" ? sum + (Number(tx.amount) || 0) : sum
   }, 0)
 
-  const monthlyExpense = (monthTransactions ?? []).reduce((sum, tx) => {
+  const monthlyExpense = monthTransactions.reduce((sum, tx) => {
     return tx.type === "expense" ? sum + (Number(tx.amount) || 0) : sum
   }, 0)
 
   const netCashflow = monthlyIncome - monthlyExpense
 
-  const activeDebts = (debts ?? []).filter((debt) => debt.status === "aktif")
+  const activeDebts = debts.filter((debt) => debt.status === "aktif")
   const outstandingHutang = activeDebts.reduce((sum, debt) => {
     if (debt.type !== "hutang") return sum
     return sum + Math.max(0, (Number(debt.amount) || 0) - (Number(debt.paid_amount) || 0))
@@ -181,11 +207,11 @@ export default async function ReportPage() {
                 <p className="text-sm text-[#64748B]">8 aktivitas terakhir pengguna</p>
               </div>
               <span className="rounded-full bg-white/[0.04] px-3 py-1 text-xs font-semibold text-[#94A3B8]">
-                {recentTransactions?.length ?? 0} item
+                {recentTransactions.length} item
               </span>
             </div>
 
-            {recentTransactions && recentTransactions.length > 0 ? (
+            {recentTransactions.length > 0 ? (
               <div className="space-y-3">
                 {recentTransactions.map((tx) => {
                   const amount = Number(tx.amount) || 0

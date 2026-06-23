@@ -1,5 +1,3 @@
-//src/components/QuickAddFAB.tsx
-
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
@@ -15,6 +13,7 @@ import {
   X,
 } from "lucide-react"
 
+import { INTERACTIVE_SPRING, TAP_FEEDBACK } from "@/lib/motion"
 import { ROUTES, transferFromHref } from "@/lib/routes"
 import { recordQuickTransaction } from "@/lib/transactions"
 import { cn, formatRupiah } from "@/lib/utils"
@@ -61,9 +60,15 @@ function parseInputRupiah(value: string): number {
   return Number(value.replace(/\D/g, "")) || 0
 }
 
-function triggerHaptic(style: "light" | "medium" = "light") {
+function triggerHaptic(style: "light" | "medium" | "success" = "light") {
   if (typeof navigator !== "undefined" && navigator.vibrate) {
-    navigator.vibrate(style === "light" ? 8 : 15)
+    const patterns = {
+      light: 8,
+      medium: 15,
+      success: [10, 50, 10],
+    }
+
+    navigator.vibrate(patterns[style])
   }
 }
 
@@ -144,8 +149,8 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
         txType === "income" ? "Pemasukan berhasil dicatat!" : "Pengeluaran berhasil dicatat!",
         {
           style: {
-            background: "#0B1120",
-            color: "#F1F5F9",
+            background: "#0B1528",
+            color: "#F8FAFC",
             border: "1px solid #10B981",
           },
         }
@@ -155,13 +160,14 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
       resetForm()
       await onSuccess?.()
       router.refresh()
+      triggerHaptic("success")
     } catch (error) {
       const message = error instanceof Error ? error.message : "Gagal menyimpan transaksi"
       toast.error(message, {
         style: {
-          background: "#0B1120",
-          color: "#F1F5F9",
-          border: "1px solid #F43F5E",
+          background: "#0B1528",
+          color: "#F8FAFC",
+          border: "1px solid #EF4444",
         },
       })
     } finally {
@@ -171,127 +177,132 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
 
   return (
     <>
-      <div className="fixed bottom-24 left-0 right-0 flex flex-col items-center z-40 pointer-events-none">
+      <div className="fixed bottom-24 left-0 right-0 z-40 flex flex-col items-center pointer-events-none">
         <AnimatePresence>
-          {open && (
+          {open ? (
             <motion.div
-              initial={{ opacity: 0, y: 12, scale: 0.9 }}
+              initial={{ opacity: 0, y: 12, scale: 0.94 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8, scale: 0.92 }}
-              transition={{ type: "spring", stiffness: 400, damping: 28 }}
-              className="flex gap-4 mb-5 pointer-events-auto"
+              exit={{ opacity: 0, y: 10, scale: 0.94 }}
+              transition={INTERACTIVE_SPRING}
+              className="mb-5 flex gap-3 pointer-events-auto"
             >
               {ACTIONS.map((action, index) => (
                 <motion.button
                   key={action.id}
-                  initial={{ opacity: 0, y: 16, scale: 0.8 }}
+                  initial={{ opacity: 0, y: 12, scale: 0.92 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.85 }}
-                  transition={{ delay: index * 0.04, type: "spring", stiffness: 400, damping: 24 }}
-                  whileTap={{ scale: 0.9 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.92 }}
+                  transition={{ ...INTERACTIVE_SPRING, delay: index * 0.03 }}
+                  whileTap={TAP_FEEDBACK}
                   onClick={() => openSheet(action.id)}
                   className="flex flex-col items-center gap-1.5"
                 >
-                  <div className={cn("bg-gradient-to-br w-12 h-12 rounded-[18px] flex items-center justify-center text-white shadow-lg", action.gradient)}>
+                  <div className={cn("flex h-12 w-12 items-center justify-center rounded-[18px] bg-gradient-to-br text-white shadow-lg", action.gradient)}>
                     <action.icon size={18} />
                   </div>
-                  <span className="text-[10px] font-bold text-slate-400 tracking-wide">{action.label}</span>
+                  <span className="text-[10px] font-semibold text-slate-300">{action.label}</span>
                 </motion.button>
               ))}
 
               <motion.button
-                initial={{ opacity: 0, y: 16, scale: 0.8 }}
+                initial={{ opacity: 0, y: 12, scale: 0.92 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 10, scale: 0.85 }}
-                transition={{ delay: 0.1, type: "spring", stiffness: 400, damping: 24 }}
-                whileTap={{ scale: 0.9 }}
+                exit={{ opacity: 0, y: 10, scale: 0.92 }}
+                transition={{ ...INTERACTIVE_SPRING, delay: 0.08 }}
+                whileTap={TAP_FEEDBACK}
                 onClick={handleTransfer}
                 className="flex flex-col items-center gap-1.5"
               >
-                <div className="bg-gradient-to-br from-violet-500 to-indigo-600 w-12 h-12 rounded-[18px] flex items-center justify-center text-white shadow-lg">
+                <div className="flex h-12 w-12 items-center justify-center rounded-[18px] border border-cyan-400/25 bg-cyan-500/15 text-[#38BDF8] shadow-lg shadow-cyan-500/10">
                   <ArrowRightLeft size={18} />
                 </div>
-                <span className="text-[10px] font-bold text-slate-400 tracking-wide">Transfer</span>
+                <span className="text-[10px] font-semibold text-slate-300">Transfer</span>
               </motion.button>
             </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
 
         <motion.button
+          type="button"
           onClick={() => {
             triggerHaptic("light")
             setOpen((prev) => !prev)
           }}
-          whileTap={{ scale: 0.9 }}
-          className="pointer-events-auto relative w-[58px] h-[58px] rounded-full flex items-center justify-center text-white shadow-2xl shadow-amber-500/20"
-          style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)" }}
+          whileTap={TAP_FEEDBACK}
+          transition={INTERACTIVE_SPRING}
+          className="pointer-events-auto relative flex h-[58px] w-[58px] items-center justify-center rounded-full border border-cyan-400/25 bg-[#38BDF8] text-[#030712] shadow-[0_18px_40px_-18px_rgba(56,189,248,0.85)]"
           aria-label={open ? "Tutup menu cepat" : "Buka menu cepat"}
         >
-          <motion.div animate={{ rotate: open ? 45 : 0 }} transition={{ type: "spring", stiffness: 400, damping: 24 }}>
+          <motion.div animate={{ rotate: open ? 45 : 0 }} transition={INTERACTIVE_SPRING}>
             {open ? <X size={22} strokeWidth={2.5} /> : <Plus size={24} strokeWidth={2.5} />}
           </motion.div>
 
-          {!open && (
+          {!open ? (
             <motion.div
-              className="absolute inset-0 rounded-full border-2 border-amber-400/40"
-              animate={{ scale: [1, 1.6], opacity: [0.6, 0] }}
-              transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
+              className="absolute inset-0 rounded-full border border-cyan-300/40"
+              animate={{ scale: [1, 1.45], opacity: [0.45, 0] }}
+              transition={{ duration: 1.8, repeat: Infinity, ease: "easeOut" }}
             />
-          )}
+          ) : null}
         </motion.button>
       </div>
 
       <AnimatePresence>
-        {sheetOpen && (
+        {sheetOpen ? (
           <>
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={closeSheet}
-              className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md"
+              className="fixed inset-0 z-50 bg-[#030712]/78 backdrop-blur-md"
             />
 
             <motion.div
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
-              transition={{ type: "spring", stiffness: 340, damping: 34 }}
-              className="fixed inset-x-0 bottom-0 z-50 rounded-t-[2rem] overflow-hidden"
-              style={{ background: "linear-gradient(180deg, #111827 0%, #0d1420 100%)" }}
+              transition={INTERACTIVE_SPRING}
+              className="fixed inset-x-0 bottom-0 z-50 overflow-hidden rounded-t-[28px] border-t border-white/[0.08] bg-[#030712]"
+              style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
             >
-              <div className="h-[2px] w-full bg-gradient-to-r from-amber-400 to-orange-500" />
+              <div className="h-[2px] w-full bg-gradient-to-r from-transparent via-[#38BDF8] to-transparent" />
 
-              <div className="px-5 pt-4 pb-10">
-                <div className="w-8 h-[3px] rounded-full bg-white/10 mx-auto mb-5" />
+              <div className="px-4 pt-4 pb-8">
+                <div className="mx-auto mb-5 h-1.5 w-10 rounded-full bg-white/[0.12]" />
 
-                <div className="flex items-center justify-between mb-4">
+                <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-white font-bold text-[15px] leading-tight">
+                    <p className="text-[15px] font-semibold tracking-tight text-white">
                       {txType === "income" ? "Catat Pemasukan" : "Catat Pengeluaran"}
                     </p>
-                    <p className="text-slate-500 text-[10px] mt-0.5">Transaksi cepat</p>
+                    <p className="mt-0.5 text-[11px] text-slate-400">Optimized untuk 3 tap cepat via FAB</p>
                   </div>
 
-                  <button
+                  <motion.button
+                    type="button"
+                    whileTap={TAP_FEEDBACK}
+                    transition={INTERACTIVE_SPRING}
                     onClick={closeSheet}
-                    className="w-8 h-8 rounded-xl bg-white/[0.05] border border-white/[0.07] flex items-center justify-center"
+                    className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-slate-300"
                     aria-label="Tutup"
                   >
-                    <X size={14} className="text-slate-500" />
-                  </button>
+                    <X size={14} />
+                  </motion.button>
                 </div>
 
-                <div className="flex gap-1.5 mb-4 p-1 rounded-2xl bg-white/[0.03] border border-white/[0.04]">
+                <div className="mb-4 flex gap-1.5 rounded-[20px] border border-white/[0.06] bg-[#0B1528] p-1">
                   {ACTIONS.map((action) => (
                     <button
                       key={action.id}
+                      type="button"
                       onClick={() => setTxType(action.id)}
                       className={cn(
-                        "flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-[11px] font-bold transition-all duration-200 border",
+                        "flex flex-1 items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-[11px] font-semibold transition-colors",
                         txType === action.id
                           ? action.activeBg
-                          : "border-transparent text-slate-600 hover:text-slate-400"
+                          : "border-transparent text-slate-500 hover:text-slate-300"
                       )}
                     >
                       <action.icon size={12} />
@@ -300,8 +311,8 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
                   ))}
                 </div>
 
-                <div className="relative mb-4">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 font-black text-xl z-10">Rp</span>
+                <div className="relative mb-4 rounded-[24px] border border-white/[0.08] bg-[#0B1528] px-4 py-4">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[20px] font-medium text-slate-500">Rp</span>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -309,83 +320,83 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
                     onChange={(event) => setAmount(formatInputRupiah(event.target.value))}
                     placeholder="0"
                     autoFocus
-                    className="relative w-full h-[58px] rounded-2xl pl-14 pr-4 bg-white/[0.04] border border-white/[0.07] text-white z-10 text-[26px] font-black tabular-nums tracking-tight placeholder:text-slate-800 placeholder:font-normal placeholder:text-xl outline-none transition-all duration-200 focus:border-white/15"
+                    className="w-full bg-transparent pl-10 pr-2 text-[28px] font-medium tracking-tight tabular-nums text-white outline-none placeholder:text-slate-700"
                   />
                 </div>
 
                 <div className="mb-4">
-                  <p className="text-[9px] font-bold text-slate-600 uppercase tracking-[0.12em] mb-1.5">Akun</p>
-                  <div className="relative">
+                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Akun</p>
+                  <div className="rounded-[20px] border border-white/[0.08] bg-[#0B1528] p-3">
                     <select
                       value={accountId}
                       onChange={(event) => setAccountId(event.target.value)}
-                      className="w-full h-11 rounded-xl px-3 pr-8 bg-white/[0.04] border border-white/[0.07] text-white text-sm font-semibold outline-none appearance-none"
+                      className="h-11 w-full appearance-none rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 text-sm font-medium text-white outline-none"
                     >
-                      {accounts.length === 0 && <option value="">Belum ada akun</option>}
+                      {accounts.length === 0 ? <option value="">Belum ada akun</option> : null}
                       {accounts.map((account) => (
-                        <option key={account.id} value={account.id} className="bg-[#111827]">
+                        <option key={account.id} value={account.id} className="bg-[#0B1528]">
                           {account.name} ({formatRupiah(account.balance ?? 0)})
                         </option>
                       ))}
                     </select>
+
+                    {selectedAccount ? (
+                      <div className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2.5">
+                        <p className="text-[10px] text-slate-400">Saldo saat ini</p>
+                        <p className="mt-1 text-sm font-medium tracking-tight tabular-nums text-white">
+                          {formatRupiah(selectedAccount.balance ?? 0)}
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
-
-                {selectedAccount && (
-                  <div className="mb-4 rounded-xl bg-white/[0.03] border border-white/[0.05] px-3 py-2.5">
-                    <p className="text-[10px] text-slate-500">Saldo saat ini</p>
-                    <p className="text-sm font-bold text-white mt-1">{formatRupiah(selectedAccount.balance ?? 0)}</p>
-                  </div>
-                )}
 
                 <input
                   type="text"
                   value={note}
                   onChange={(event) => setNote(event.target.value.slice(0, 100))}
-                  placeholder="Catatan (opsional)"
-                  className="w-full h-11 rounded-xl px-4 bg-white/[0.03] border border-white/[0.06] text-white text-sm placeholder:text-slate-700 outline-none focus:border-white/15 transition-all mb-5"
+                  placeholder="Catatan opsional"
+                  className="mb-5 h-12 w-full rounded-[20px] border border-white/[0.08] bg-[#0B1528] px-4 text-sm text-white outline-none placeholder:text-slate-600"
                 />
 
-                {!hasAccounts && (
-                  <p className="text-amber-400 text-xs mb-4">Tambahkan akun terlebih dahulu sebelum mencatat transaksi.</p>
-                )}
+                {!hasAccounts ? (
+                  <p className="mb-4 text-xs text-amber-300">Tambahkan akun terlebih dahulu sebelum mencatat transaksi.</p>
+                ) : null}
 
                 <motion.button
+                  type="button"
                   onClick={handleSubmit}
                   disabled={!canSubmit}
-                  whileTap={canSubmit ? { scale: 0.97 } : {}}
+                  whileTap={canSubmit ? TAP_FEEDBACK : {}}
+                  transition={INTERACTIVE_SPRING}
                   className={cn(
-                    "w-full py-4 rounded-2xl font-bold text-[15px] flex items-center justify-center gap-2 transition-all duration-200",
+                    "flex w-full items-center justify-center gap-2 rounded-[20px] px-4 py-4 text-[15px] font-semibold transition-all",
                     canSubmit
                       ? txType === "income"
-                        ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-xl shadow-emerald-500/20"
-                        : "bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-xl shadow-rose-500/20"
-                      : "bg-white/[0.03] text-slate-700 border border-white/[0.05] cursor-not-allowed"
+                        ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-[0_18px_40px_-22px_rgba(16,185,129,0.8)]"
+                        : "bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-[0_18px_40px_-22px_rgba(239,68,68,0.8)]"
+                      : "cursor-not-allowed border border-white/[0.06] bg-white/[0.03] text-slate-600"
                   )}
                 >
                   {loading ? (
                     <>
-                      <Loader2 size={16} className="animate-spin" />
-                      Menyimpan...
+                      <Loader2 size={16} className="animate-spin" /> Menyimpan...
                     </>
                   ) : txType === "income" ? (
                     <>
-                      <TrendingUp size={16} />
-                      Simpan Pemasukan
+                      <TrendingUp size={16} /> Simpan Pemasukan
                     </>
                   ) : (
                     <>
-                      <TrendingDown size={16} />
-                      Simpan Pengeluaran
+                      <TrendingDown size={16} /> Simpan Pengeluaran
                     </>
                   )}
                 </motion.button>
               </div>
             </motion.div>
           </>
-        )}
+        ) : null}
       </AnimatePresence>
     </>
   )
 }
-

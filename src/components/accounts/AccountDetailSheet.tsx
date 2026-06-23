@@ -1,8 +1,7 @@
-// src/components/accounts/AccountDetailSheet.tsx
 "use client"
 
 import { useEffect, useState } from "react"
-import { motion, AnimatePresence } from "framer-motion"
+import { AnimatePresence, motion } from "framer-motion"
 import {
   X,
   ArrowUpRight,
@@ -16,6 +15,7 @@ import {
 } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { ACCOUNT_STYLE, type Account, type AccountType } from "@/app/dashboard/types"
+import { INTERACTIVE_SPRING, TAP_FEEDBACK } from "@/lib/motion"
 import { formatRupiah, cn, maskAccountNumber, formatAccountNumber } from "@/lib/utils"
 import { accountDetailHref, topupAccountHref, transferFromHref } from "@/lib/routes"
 import toast from "react-hot-toast"
@@ -33,11 +33,11 @@ const triggerHaptic = (style: "light" | "medium" = "light") => {
 }
 
 const FALLBACK_STYLE = {
-  gradient: "from-[#1E293B]/40 to-[#151E32]/40",
-  border: "border-white/[0.06]",
+  gradient: "from-slate-400/20 to-slate-700/10",
+  border: "border-white/[0.08]",
   accentColor: "#64748b",
-  iconBg: "bg-[#151E32] text-[#94A3B8] border border-white/[0.06]",
-  icon: <CreditCard size={24} />,
+  iconBg: "bg-white/[0.08] text-slate-200 border border-white/[0.08]",
+  icon: <CreditCard size={22} />,
   label: "Lainnya",
 }
 
@@ -46,15 +46,11 @@ export default function AccountDetailSheet({ account, isOpen, onClose }: Props) 
   const [showNumber, setShowNumber] = useState(false)
 
   useEffect(() => {
-    if (!isOpen) {
-      setShowNumber(false)
-    }
+    if (!isOpen) setShowNumber(false)
   }, [isOpen])
 
   useEffect(() => {
-    if (isOpen && account) {
-      triggerHaptic("medium")
-    }
+    if (isOpen && account) triggerHaptic("medium")
   }, [isOpen, account])
 
   if (!account) return null
@@ -70,213 +66,209 @@ export default function AccountDetailSheet({ account, isOpen, onClose }: Props) 
     try {
       await navigator.clipboard.writeText(account.account_number)
       toast.success("Nomor rekening disalin!", {
-        style: { background: "#0B1120", color: "#F1F5F9", border: "1px solid #10B981" },
+        style: { background: "#0B1528", color: "#F8FAFC", border: "1px solid #10B981" },
       })
     } catch {
       toast.error("Gagal menyalin", {
-        style: { background: "#0B1120", color: "#F1F5F9", border: "1px solid #F43F5E" },
+        style: { background: "#0B1528", color: "#F8FAFC", border: "1px solid #EF4444" },
       })
     }
   }
 
   return (
     <AnimatePresence>
-      {isOpen && (
+      {isOpen ? (
         <>
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.25, ease: [0.32, 0.72, 0, 1] }}
             onClick={() => {
               triggerHaptic("light")
               onClose()
             }}
-            className="fixed inset-0 z-50 bg-[#020617]/70 backdrop-blur-md"
-            style={{ WebkitBackdropFilter: "blur(12px)" }}
+            className="fixed inset-0 z-50 bg-[#030712]/78 backdrop-blur-md"
           />
 
           <motion.div
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
-            transition={{ type: "spring", stiffness: 300, damping: 30, mass: 0.8 }}
+            transition={INTERACTIVE_SPRING}
             drag="y"
             dragConstraints={{ top: 0 }}
-            dragElastic={0.1}
+            dragElastic={0.08}
             onDragEnd={(_, info) => {
-              if (info.offset.y > 100 || info.velocity.y > 500) {
+              if (info.offset.y > 110 || info.velocity.y > 600) {
                 triggerHaptic("light")
                 onClose()
               }
             }}
-            className="fixed inset-x-0 bottom-0 z-50 max-h-[92vh] flex flex-col rounded-t-[2rem] overflow-hidden bg-[#0B1120] shadow-[0_-20px_60px_-15px_rgba(0,0,0,0.5)]"
+            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[92vh] flex-col overflow-hidden rounded-t-[28px] border-t border-white/[0.08] bg-[#030712]"
             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
           >
-            <div className={cn("h-[2px] w-full bg-gradient-to-r shrink-0", cfg.gradient)} />
-
-            <div className="flex justify-center pt-3 pb-2 cursor-grab active:cursor-grabbing shrink-0 bg-[#0B1120]">
-              <div className="w-10 h-1.5 rounded-full bg-white/10" />
+            <div className="h-[2px] w-full bg-gradient-to-r from-transparent via-[#38BDF8] to-transparent" />
+            <div className="flex justify-center py-3">
+              <div className="h-1.5 w-10 rounded-full bg-white/[0.12]" />
             </div>
 
-            <div
-              className="flex-1 overflow-y-auto overscroll-contain px-5 py-4 scroll-native"
-              style={{ WebkitOverflowScrolling: "touch" }}
-            >
-              <div className="flex items-center justify-between mb-4">
+            <div className="flex-1 overflow-y-auto px-4 pb-6">
+              <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-[#F1F5F9] font-bold text-[17px] tracking-tight">Detail Akun</h2>
-                  <p className="text-[#64748B] text-[11px] mt-0.5">Informasi &amp; aksi cepat</p>
+                  <h2 className="text-[17px] font-semibold tracking-tight text-white">Detail Akun</h2>
+                  <p className="mt-0.5 text-[11px] text-slate-400">Informasi akun dan aksi cepat premium</p>
                 </div>
 
-                <button
+                <motion.button
+                  type="button"
+                  whileTap={TAP_FEEDBACK}
+                  transition={INTERACTIVE_SPRING}
                   onClick={() => {
                     triggerHaptic("light")
                     onClose()
                   }}
-                  className="p-2 -mr-2 rounded-full hover:bg-white/[0.06] active:scale-90 transition-all"
+                  className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-slate-300"
+                  aria-label="Tutup"
                 >
-                  <X size={18} className="text-[#94A3B8]" />
-                </button>
+                  <X size={16} />
+                </motion.button>
               </div>
 
-              <div
+              <section
                 className={cn(
-                  "rounded-3xl p-5 border backdrop-blur-xl bg-gradient-to-br relative overflow-hidden mb-5",
-                  cfg.gradient,
+                  "relative overflow-hidden rounded-[24px] border bg-[#0B1528] p-4",
                   cfg.border
                 )}
+                style={{ boxShadow: `0 18px 42px -30px ${cfg.accentColor}88` }}
               >
-                <div
-                  className="absolute -top-10 -right-10 w-40 h-40 rounded-full blur-3xl opacity-20 pointer-events-none"
-                  style={{ background: cfg.accentColor }}
-                />
+                <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.04),transparent_38%,rgba(56,189,248,0.04))]" />
 
-                <div className="relative flex items-start justify-between">
+                <div className="relative z-10 flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
-                    <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center border border-white/[0.08]", cfg.iconBg)}>
+                    <div className={cn("flex h-12 w-12 items-center justify-center rounded-xl border border-white/[0.08]", cfg.iconBg)}>
                       {cfg.icon}
                     </div>
                     <div>
-                      <p className="text-[10px] font-bold tracking-[0.15em] text-[#94A3B8] uppercase">{cfg.label}</p>
-                      <h3 className="text-[#F1F5F9] font-bold text-[17px] tracking-tight">{account.name}</h3>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">{cfg.label}</p>
+                      <h3 className="text-base font-semibold tracking-tight text-white">{account.name}</h3>
                     </div>
                   </div>
 
-                  {account.is_default && (
-                    <span className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[9px] font-bold uppercase tracking-wider">
-                      <Shield size={10} /> Utama
+                  {account.is_default ? (
+                    <span className="inline-flex items-center gap-1 rounded-xl border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[10px] font-medium text-amber-300">
+                      <Shield size={11} /> Utama
                     </span>
-                  )}
+                  ) : null}
                 </div>
 
                 <div className="mt-5">
-                  <p className="text-[#94A3B8] text-[11px] font-medium mb-1">Saldo Tersedia</p>
-                  <p className="text-[#F1F5F9] font-black text-[28px] tabular-nums tracking-tight leading-none">
+                  <p className="text-[11px] text-slate-400">Saldo tersedia</p>
+                  <p className="mt-1 text-[30px] font-medium leading-none tracking-tight tabular-nums text-white">
                     {formatRupiah(balance)}
                   </p>
                 </div>
 
-                {account.account_number && (
-                  <div className="mt-4 pt-4 border-t border-white/[0.06] flex items-center justify-between">
-                    <span className="font-mono text-[13px] text-[#F1F5F9] tracking-wider tabular-nums">
-                      {showNumber
-                        ? formatAccountNumber(account.account_number)
-                        : maskAccountNumber(account.account_number)}
-                    </span>
+                {account.account_number ? (
+                  <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.03] p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Nomor akun</p>
+                        <p className="mt-1 truncate font-mono text-sm tracking-wide text-slate-300">
+                          {showNumber ? formatAccountNumber(account.account_number) : maskAccountNumber(account.account_number)}
+                        </p>
+                      </div>
 
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => {
-                          triggerHaptic("light")
-                          setShowNumber((prev) => !prev)
-                        }}
-                        className="p-2 rounded-lg bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.08] active:scale-90 transition-all"
-                      >
-                        {showNumber ? (
-                          <EyeOff size={14} className="text-[#94A3B8]" />
-                        ) : (
-                          <Eye size={14} className="text-[#94A3B8]" />
-                        )}
-                      </button>
+                      <div className="flex gap-2 shrink-0">
+                        <motion.button
+                          type="button"
+                          whileTap={TAP_FEEDBACK}
+                          transition={INTERACTIVE_SPRING}
+                          onClick={() => {
+                            triggerHaptic("light")
+                            setShowNumber((prev) => !prev)
+                          }}
+                          className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.06] bg-white/[0.04] text-slate-300"
+                        >
+                          {showNumber ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </motion.button>
 
-                      <button
-                        onClick={handleCopy}
-                        className="p-2 rounded-lg bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.08] active:scale-90 transition-all"
-                      >
-                        <Copy size={14} className="text-[#94A3B8]" />
-                      </button>
+                        <motion.button
+                          type="button"
+                          whileTap={TAP_FEEDBACK}
+                          transition={INTERACTIVE_SPRING}
+                          onClick={handleCopy}
+                          className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.06] bg-white/[0.04] text-slate-300"
+                        >
+                          <Copy size={14} />
+                        </motion.button>
+                      </div>
                     </div>
                   </div>
-                )}
-              </div>
+                ) : null}
+              </section>
 
-              <div className="mb-4">
-                <p className="text-[#94A3B8] text-[10px] font-bold uppercase tracking-wider mb-2.5">Aksi Cepat</p>
-                <div className="grid grid-cols-3 gap-2">
+              <section className="mt-6">
+                <p className="mb-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Aksi Cepat</p>
+                <div className="grid grid-cols-3 gap-3">
                   {[
                     {
                       label: "Transfer",
                       icon: ArrowUpRight,
-                      color: "bg-blue-500/15 text-blue-400 border-blue-500/20",
-                      action: () => {
-                        triggerHaptic("medium")
-                        router.push(transferFromHref(account.id))
-                      },
+                      tone: "border-[#38BDF8]/20 bg-[#38BDF8]/10 text-[#38BDF8]",
+                      action: () => router.push(transferFromHref(account.id)),
                     },
                     {
                       label: "Mutasi",
                       icon: History,
-                      color: "bg-amber-500/15 text-amber-400 border-amber-500/20",
-                      action: () => {
-                        triggerHaptic("medium")
-                        router.push(accountDetailHref(account.id, "overview"))
-                      },
+                      tone: "border-amber-500/20 bg-amber-500/10 text-amber-300",
+                      action: () => router.push(accountDetailHref(account.id, "overview")),
                     },
                     {
                       label: "Top Up",
                       icon: ArrowDownLeft,
-                      color: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
-                      action: () => {
-                        triggerHaptic("medium")
-                        router.push(topupAccountHref(account.id))
-                      },
+                      tone: "border-emerald-500/20 bg-emerald-500/10 text-emerald-300",
+                      action: () => router.push(topupAccountHref(account.id)),
                     },
                   ].map((item) => (
                     <motion.button
                       key={item.label}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={item.action}
-                      className="flex flex-col items-center gap-2 p-3.5 rounded-2xl bg-[#151E32] border border-white/[0.04] hover:bg-[#1E293B] transition-all"
+                      type="button"
+                      whileTap={TAP_FEEDBACK}
+                      transition={INTERACTIVE_SPRING}
+                      onClick={() => {
+                        triggerHaptic("medium")
+                        item.action()
+                      }}
+                      className="rounded-[20px] border border-white/[0.06] bg-[#0B1528] p-3"
                     >
-                      <div className={cn("w-11 h-11 rounded-xl flex items-center justify-center border", item.color)}>
-                        <item.icon size={18} strokeWidth={2.5} />
+                      <div className="flex flex-col items-center gap-2 text-center">
+                        <div className={cn("flex h-11 w-11 items-center justify-center rounded-xl border", item.tone)}>
+                          <item.icon size={18} />
+                        </div>
+                        <span className="text-[11px] font-medium text-slate-300">{item.label}</span>
                       </div>
-                      <span className="text-[11px] font-bold text-[#F1F5F9]">{item.label}</span>
                     </motion.button>
                   ))}
                 </div>
-              </div>
+              </section>
 
               <motion.button
-                whileTap={{ scale: 0.98 }}
+                type="button"
+                whileTap={TAP_FEEDBACK}
+                transition={INTERACTIVE_SPRING}
                 onClick={() => {
                   triggerHaptic("medium")
                   onClose()
                   router.push(accountDetailHref(account.id, "settings"))
                 }}
-                className="w-full py-4 rounded-2xl bg-gradient-to-r from-violet-500 to-indigo-600 text-white text-sm font-bold shadow-lg shadow-violet-900/30 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+                className="mt-6 flex w-full items-center justify-center gap-2 rounded-[20px] border border-cyan-500/20 bg-cyan-500/10 px-4 py-4 text-sm font-medium text-cyan-300"
               >
-                Kelola Akun <ArrowUpRight size={16} strokeWidth={2.5} />
+                Kelola Akun <ArrowUpRight size={16} />
               </motion.button>
-
-              <div className="h-6" />
             </div>
           </motion.div>
         </>
-      )}
+      ) : null}
     </AnimatePresence>
   )
 }
-
-

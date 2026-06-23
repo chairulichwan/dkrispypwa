@@ -3,7 +3,7 @@
 import { NextResponse } from "next/server"
 
 import type { Database } from "@/lib/supabase/database.types"
-import { createClient } from "@/lib/supabase/server"
+import { createServerSupabaseClient } from "@/lib/supabase/server"
 
 type CashFlowStatsRow = {
   transaction_count: number | null
@@ -11,17 +11,12 @@ type CashFlowStatsRow = {
   avg_daily_expense: number | null
 }
 
-type AccountBalanceRow = Pick<
-  Database["public"]["Tables"]["accounts"]["Row"],
-  "balance"
->
-
-type PredictionInsert =
-  Database["public"]["Tables"]["cash_flow_predictions"]["Insert"]
+type AccountBalanceRow = Pick<Database["public"]["Tables"]["accounts"]["Row"], "balance">
+type PredictionInsert = Database["public"]["Tables"]["cash_flow_predictions"]["Insert"]
 
 export async function POST() {
   try {
-    const supabase = await createClient()
+    const supabase = await createServerSupabaseClient()
     const {
       data: { user },
     } = await supabase.auth.getUser()
@@ -33,13 +28,10 @@ export async function POST() {
     const startDate = new Date()
     startDate.setMonth(startDate.getMonth() - 6)
 
-    const { data: stats, error: statsError } = await (supabase.rpc as any)(
-      "get_cash_flow_stats",
-      {
-        p_user_id: user.id,
-        p_start_date: startDate.toISOString().split("T")[0],
-      }
-    )
+    const { data: stats, error: statsError } = await (supabase.rpc as any)("get_cash_flow_stats", {
+      p_user_id: user.id,
+      p_start_date: startDate.toISOString().split("T")[0],
+    })
 
     if (statsError) throw statsError
 
@@ -48,8 +40,7 @@ export async function POST() {
     if (statRows.length === 0 || Number(statRows[0]?.transaction_count ?? 0) < 5) {
       return NextResponse.json(
         {
-          error:
-            "Data transaksi tidak cukup (minimal 5 transaksi dalam 6 bulan terakhir)",
+          error: "Data transaksi tidak cukup (minimal 5 transaksi dalam 6 bulan terakhir)",
         },
         { status: 400 }
       )
@@ -59,17 +50,16 @@ export async function POST() {
     const avgIncome = Number(stat.avg_daily_income) || 0
     const avgExpense = Number(stat.avg_daily_expense) || 0
 
-    const { data: accounts } = await supabase
+    const { data: accounts, error: accountsError } = await supabase
       .from("accounts")
       .select("balance")
       .eq("user_id", user.id)
       .is("deleted_at", null)
 
+    if (accountsError) throw accountsError
+
     const accountRows = (accounts ?? []) as AccountBalanceRow[]
-    let currentBalance = accountRows.reduce(
-      (sum, acc) => sum + (Number(acc.balance) || 0),
-      0
-    )
+    let currentBalance = accountRows.reduce((sum, acc) => sum + (Number(acc.balance) || 0), 0)
 
     const predictions: PredictionInsert[] = []
 
@@ -79,7 +69,7 @@ export async function POST() {
 
       const dayOfWeek = date.getDay()
       const isWeekend = dayOfWeek === 0 || dayOfWeek === 6
-      const weekendMultiplier = isWeekend ? 1.2 : 1.0
+      const weekendMultiplier = isWeekend ? 1.2 : 1
 
       const predictedIncome = avgIncome
       const predictedExpense = avgExpense * weekendMultiplier
@@ -96,14 +86,16 @@ export async function POST() {
       })
     }
 
-    await supabase
+    const { error: deleteError } = await supabase
       .from("cash_flow_predictions")
       .delete()
       .eq("user_id", user.id)
 
-    const { error: insertError } = await supabase
-      .from("cash_flow_predictions")
-      .insert(predictions)
+    if (deleteError) throw deleteError
+
+    const { error: insertError } = await (supabase.from("cash_flow_predictions") as any).insert(
+      predictions as PredictionInsert[]
+    )
 
     if (insertError) throw insertError
 
@@ -120,7 +112,7 @@ export async function POST() {
     console.error("Error generating prediction:", error)
 
     return NextResponse.json(
-      { error: error.message || "Failed to generate prediction" },
+      { error: error?.message || "Failed to generate prediction" },
       { status: 500 }
     )
   }

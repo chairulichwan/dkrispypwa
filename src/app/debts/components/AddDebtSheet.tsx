@@ -1,9 +1,13 @@
+//src\app\debts\components\AddDebtSheet.tsx
+
+
 "use client"
 
-import { useCallback, useEffect, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 import {
   AlertCircle,
+  CalendarDays,
   ChevronDown,
   CreditCard,
   Loader2,
@@ -19,21 +23,15 @@ import toast from "react-hot-toast"
 
 import { createDebtRecord } from "@/lib/debts"
 import { cn, formatRupiah } from "@/lib/utils"
+import type { DebtAccountItem } from "../types"
 import { useAddDebtForm, type AddDebtContactItem } from "./useAddDebtForm"
-import ModernDatePicker from "./ModernDatePicker"
-
-interface AccountItem {
-  id: string
-  name: string
-  balance: number | null
-}
 
 interface Props {
   isOpen: boolean
   onClose: () => void
   onSuccess: () => void | Promise<void>
   contacts: AddDebtContactItem[]
-  accounts: AccountItem[]
+  accounts: DebtAccountItem[]
   userId: string
 }
 
@@ -51,9 +49,7 @@ function Field({
       <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-widest text-[#64748B]">
         {label}
         {optional ? (
-          <span className="normal-case font-normal tracking-normal text-[#334155]">
-            (opsional)
-          </span>
+          <span className="normal-case font-normal tracking-normal text-[#334155]">(opsional)</span>
         ) : null}
       </p>
       {children}
@@ -116,29 +112,22 @@ export default function AddDebtSheet({
   } = useAddDebtForm({ contacts })
 
   const noContactsAtAll = contacts.length === 0
-  const noSearchResults =
-    !isNewContact &&
-    contactSearch.trim() !== "" &&
-    filteredContacts.length === 0
-
+  const noSearchResults = !isNewContact && contactSearch.trim() !== "" && filteredContacts.length === 0
   const noAccounts = accounts.length === 0
 
-  const selectedAccount =
-    accounts.find((account) => account.id === accountId) ?? null
+  const selectedAccount = useMemo(
+    () => accounts.find((account) => account.id === accountId) ?? null,
+    [accountId, accounts]
+  )
 
   const selectedAccountBalance = Number(selectedAccount?.balance) || 0
 
   const isInsufficientFunds =
-    type === "piutang" &&
-    !!accountId &&
-    !!selectedAccount &&
-    amountNumeric > selectedAccountBalance
+    type === "piutang" && !!accountId && !!selectedAccount && amountNumeric > selectedAccountBalance
 
   const amountCompact =
     amountNumeric >= 1_000_000
-      ? `${(amountNumeric / 1_000_000).toFixed(
-          amountNumeric % 1_000_000 === 0 ? 0 : 1
-        )}jt`
+      ? `${(amountNumeric / 1_000_000).toFixed(amountNumeric % 1_000_000 === 0 ? 0 : 1)}jt`
       : amountNumeric >= 1_000
         ? `${(amountNumeric / 1_000).toFixed(0)}rb`
         : null
@@ -183,7 +172,7 @@ export default function AddDebtSheet({
     setLoading(true)
 
     try {
-      const count = Math.max(1, parseInt(installmentCount) || 1)
+      const count = Math.max(1, parseInt(installmentCount, 10) || 1)
       const rate = parseFloat(interestRate) || 0
       const monthlyInstallment = installmentPreview?.monthly ?? 0
 
@@ -258,14 +247,13 @@ export default function AddDebtSheet({
           <motion.div
             role="dialog"
             aria-modal="true"
-            aria-labelledby="sheet-title"
+            aria-labelledby="add-debt-title"
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", stiffness: 320, damping: 32, mass: 0.8 }}
-            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[94vh] flex-col overflow-hidden rounded-t-[28px] bg-[#0B1120] shadow-[0_-32px_80px_-10px_rgba(0,0,0,0.7)] outline-none"
+            className="fixed inset-x-0 bottom-0 z-50 flex max-h-[94vh] flex-col overflow-hidden rounded-t-[28px] bg-[#0B1120] shadow-[0_-32px_80px_-10px_rgba(0,0,0,0.7)]"
             style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
-            tabIndex={-1}
           >
             <div className="h-[2px] w-full shrink-0 bg-gradient-to-r from-sky-500 via-violet-500 to-indigo-500" />
 
@@ -275,15 +263,10 @@ export default function AddDebtSheet({
 
             <div className="flex shrink-0 items-center justify-between border-b border-white/[0.06] px-5 py-3">
               <div>
-                <h2
-                  id="sheet-title"
-                  className="text-base font-bold tracking-tight text-[#F1F5F9]"
-                >
+                <h2 id="add-debt-title" className="text-base font-bold tracking-tight text-[#F1F5F9]">
                   Tambah Catatan
                 </h2>
-                <p className="mt-0.5 text-[11px] text-[#475569]">
-                  Hutang atau piutang baru
-                </p>
+                <p className="mt-0.5 text-[11px] text-[#475569]">Hutang atau piutang baru</p>
               </div>
 
               <motion.button
@@ -303,34 +286,29 @@ export default function AddDebtSheet({
               <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/[0.05] bg-[#0D1526] p-1">
                 {(["piutang", "hutang"] as const).map((item) => {
                   const active = type === item
-                  const isPiutang = item === "piutang"
+                  const currentIsPiutang = item === "piutang"
 
                   return (
                     <motion.button
                       key={item}
+                      type="button"
                       whileTap={{ scale: 0.96 }}
                       onClick={() => setType(item)}
                       className={cn(
                         "flex items-center justify-center gap-2 rounded-xl border py-3 text-sm font-bold transition-all",
                         active
-                          ? isPiutang
+                          ? currentIsPiutang
                             ? "border-emerald-500/25 bg-emerald-500/15 text-emerald-400"
                             : "border-rose-500/25 bg-rose-500/15 text-rose-400"
                           : "border-transparent text-[#475569]"
                       )}
                     >
-                      {isPiutang ? (
-                        <TrendingUp
-                          size={14}
-                          className={active ? "text-emerald-400" : "text-[#334155]"}
-                        />
+                      {currentIsPiutang ? (
+                        <TrendingUp size={14} className={active ? "text-emerald-400" : "text-[#334155]"} />
                       ) : (
-                        <TrendingDown
-                          size={14}
-                          className={active ? "text-rose-400" : "text-[#334155]"}
-                        />
+                        <TrendingDown size={14} className={active ? "text-rose-400" : "text-[#334155]"} />
                       )}
-                      {isPiutang ? "Piutang" : "Hutang"}
+                      {currentIsPiutang ? "Piutang" : "Hutang"}
                     </motion.button>
                   )
                 })}
@@ -415,6 +393,7 @@ export default function AddDebtSheet({
                 <div className="mb-1.5 flex items-center justify-between">
                   <span />
                   <motion.button
+                    type="button"
                     whileTap={{ scale: 0.95 }}
                     onClick={toggleIsNewContact}
                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400"
@@ -460,9 +439,7 @@ export default function AddDebtSheet({
                   ) : noContactsAtAll ? (
                     <div className="rounded-2xl border border-dashed border-white/[0.08] bg-white/[0.02] px-4 py-5 text-center">
                       <p className="text-sm font-semibold text-[#CBD5E1]">Belum ada kontak</p>
-                      <p className="mt-1 text-xs text-[#475569]">
-                        Buat kontak baru untuk mulai mencatat hutang/piutang.
-                      </p>
+                      <p className="mt-1 text-xs text-[#475569]">Buat kontak baru untuk mulai mencatat hutang/piutang.</p>
                       <button
                         type="button"
                         onClick={toggleIsNewContact}
@@ -520,16 +497,9 @@ export default function AddDebtSheet({
                           className={cn(inputCls, "appearance-none pr-9")}
                           aria-label="Pilih kontak"
                         >
-                          {filteredContacts.length === 0 ? (
-                            <option value="">Tidak ada kontak ditemukan</option>
-                          ) : null}
-
+                          {filteredContacts.length === 0 ? <option value="">Tidak ada kontak ditemukan</option> : null}
                           {filteredContacts.map((contact) => (
-                            <option
-                              key={contact.id}
-                              value={contact.id}
-                              className="bg-[#0D1526]"
-                            >
+                            <option key={contact.id} value={contact.id} className="bg-[#0D1526]">
                               {contact.name}
                             </option>
                           ))}
@@ -555,12 +525,7 @@ export default function AddDebtSheet({
                       />
 
                       {noAccounts ? (
-                        <div
-                          className={cn(
-                            inputCls,
-                            "flex items-center pl-9 text-[13px] text-[#475569]"
-                          )}
-                        >
+                        <div className={cn(inputCls, "flex items-center pl-9 text-[13px] text-[#475569]")}>
                           Belum ada akun
                         </div>
                       ) : (
@@ -579,11 +544,7 @@ export default function AddDebtSheet({
                               Tanpa akun
                             </option>
                             {accounts.map((account) => (
-                              <option
-                                key={account.id}
-                                value={account.id}
-                                className="bg-[#0D1526]"
-                              >
+                              <option key={account.id} value={account.id} className="bg-[#0D1526]">
                                 {account.name} ({formatRupiah(account.balance ?? 0)})
                               </option>
                             ))}
@@ -603,22 +564,39 @@ export default function AddDebtSheet({
                         animate={{ opacity: 1, y: 0 }}
                         className="flex items-center gap-1 text-[11px] text-rose-400"
                       >
-                        <AlertCircle size={11} />
-                        Dana akun Anda tidak mencukupi. Saldo tersedia{" "}
-                        {formatRupiah(selectedAccountBalance)}.
+                        <AlertCircle size={11} /> Dana akun Anda tidak mencukupi. Saldo tersedia {formatRupiah(selectedAccountBalance)}.
                       </motion.p>
                     ) : null}
                   </div>
                 </Field>
 
-                <ModernDatePicker
-                  value={dueDate}
-                  onChange={setDueDate}
-                  label="Jatuh Tempo"
-                  isInvalid={isDueDateInPast}
-                  errorMessage="Tanggal di masa lalu"
-                  placeholder="Pilih tanggal"
-                />
+                <Field label="Jatuh Tempo" optional>
+                  <div className="space-y-1.5">
+                    <div className="relative">
+                      <CalendarDays
+                        size={13}
+                        className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#475569]"
+                      />
+                      <input
+                        type="date"
+                        value={dueDate}
+                        onChange={(event) => setDueDate(event.target.value)}
+                        className={cn(inputCls, "pl-9 text-[13px]", isDueDateInPast && "border-rose-500/60 text-rose-300")}
+                        aria-label="Tanggal jatuh tempo"
+                      />
+                    </div>
+
+                    {isDueDateInPast ? (
+                      <motion.p
+                        initial={{ opacity: 0, y: -4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="flex items-center gap-1 text-[11px] text-rose-400"
+                      >
+                        <AlertCircle size={11} /> Tanggal jatuh tempo tidak boleh di masa lalu
+                      </motion.p>
+                    ) : null}
+                  </div>
+                </Field>
               </div>
 
               <Field label="Keterangan">
@@ -643,8 +621,9 @@ export default function AddDebtSheet({
               </Field>
 
               <motion.button
+                type="button"
                 whileTap={{ scale: 0.99 }}
-                onClick={() => setUseInstallment((prev) => !prev)}
+                onClick={() => setUseInstallment((prev: boolean) => !prev)}
                 aria-expanded={useInstallment}
                 className={cn(
                   "flex w-full items-center justify-between rounded-2xl border p-4 transition-all",
@@ -654,17 +633,10 @@ export default function AddDebtSheet({
                 )}
               >
                 <div className="text-left">
-                  <p
-                    className={cn(
-                      "text-sm font-bold",
-                      useInstallment ? "text-violet-300" : "text-[#CBD5E1]"
-                    )}
-                  >
+                  <p className={cn("text-sm font-bold", useInstallment ? "text-violet-300" : "text-[#CBD5E1]")}>
                     Cicilan &amp; Bunga
                   </p>
-                  <p className="mt-0.5 text-[11px] text-[#475569]">
-                    Flat = % per bulan, Efektif = % per tahun
-                  </p>
+                  <p className="mt-0.5 text-[11px] text-[#475569]">Flat = % per bulan, Efektif = % per tahun</p>
                 </div>
 
                 <div
@@ -692,13 +664,7 @@ export default function AddDebtSheet({
                   >
                     <div className="space-y-4 pb-2 pt-1">
                       <div className="grid grid-cols-2 gap-3">
-                        <Field
-                          label={
-                            interestType === "flat"
-                              ? "Bunga / Bulan"
-                              : "Bunga / Tahun"
-                          }
-                        >
+                        <Field label={interestType === "flat" ? "Bunga / Bulan" : "Bunga / Tahun"}>
                           <div className="relative">
                             <input
                               type="number"
@@ -709,11 +675,7 @@ export default function AddDebtSheet({
                               onChange={(event) => setInterestRate(event.target.value)}
                               placeholder="0"
                               className={cn(inputCls, "pr-12")}
-                              aria-label={
-                                interestType === "flat"
-                                  ? "Suku bunga per bulan"
-                                  : "Suku bunga per tahun"
-                              }
+                              aria-label={interestType === "flat" ? "Suku bunga per bulan" : "Suku bunga per tahun"}
                             />
                             <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-[#475569]">
                               {interestType === "flat" ? "%/bln" : "%/th"}
@@ -754,9 +716,7 @@ export default function AddDebtSheet({
                               )}
                             >
                               <p className="text-sm font-bold">Flat</p>
-                              <p className="mt-0.5 text-[10px] leading-relaxed text-inherit/80">
-                                Dari pokok awal, % per bulan
-                              </p>
+                              <p className="mt-0.5 text-[10px] leading-relaxed text-inherit/80">Dari pokok awal, % per bulan</p>
                             </button>
 
                             <button
@@ -771,19 +731,20 @@ export default function AddDebtSheet({
                               )}
                             >
                               <p className="text-sm font-bold">Efektif</p>
-                              <p className="mt-0.5 text-[10px] leading-relaxed text-inherit/80">
-                                Dari sisa pokok, % per tahun
-                              </p>
+                              <p className="mt-0.5 text-[10px] leading-relaxed text-inherit/80">Dari sisa pokok, % per tahun</p>
                             </button>
                           </div>
                         </Field>
 
-                        <ModernDatePicker
-                          value={startDate}
-                          onChange={setStartDate}
-                          label="Tanggal Mulai"
-                          placeholder="Pilih tanggal"
-                        />
+                        <Field label="Tanggal Mulai">
+                          <input
+                            type="date"
+                            value={startDate}
+                            onChange={(event) => setStartDate(event.target.value)}
+                            className={inputCls}
+                            aria-label="Tanggal mulai cicilan"
+                          />
+                        </Field>
                       </div>
 
                       {installmentPreview ? (
@@ -793,9 +754,7 @@ export default function AddDebtSheet({
                           className="rounded-2xl border border-violet-500/20 bg-[#0D1526] p-4"
                         >
                           <div className="mb-3 flex items-center justify-between">
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-violet-400">
-                              Preview Angsuran
-                            </p>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-violet-400">Preview Angsuran</p>
                             <span className="rounded-full bg-[#151E32] px-2 py-0.5 text-[10px] font-medium text-[#475569]">
                               {interestType === "flat" ? "Flat Bulanan" : "Anuitas Tahunan"}
                             </span>
@@ -826,9 +785,7 @@ export default function AddDebtSheet({
                             ].map((row) => (
                               <div key={row.label}>
                                 <p className="mb-0.5 text-[10px] text-[#475569]">{row.label}</p>
-                                <p className={cn("text-sm font-black tabular-nums", row.color)}>
-                                  {row.value}
-                                </p>
+                                <p className={cn("text-sm font-black tabular-nums", row.color)}>{row.value}</p>
                               </div>
                             ))}
                           </div>
@@ -850,11 +807,7 @@ export default function AddDebtSheet({
               <motion.button
                 onClick={handleSubmit}
                 disabled={!isValid || loading || isOverLimit || isInsufficientFunds}
-                whileTap={
-                  isValid && !loading && !isOverLimit && !isInsufficientFunds
-                    ? { scale: 0.97 }
-                    : {}
-                }
+                whileTap={isValid && !loading && !isOverLimit && !isInsufficientFunds ? { scale: 0.97 } : {}}
                 className={cn(
                   "flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-sm font-bold transition-all",
                   isValid && !loading && !isOverLimit && !isInsufficientFunds
@@ -892,18 +845,18 @@ export default function AddDebtSheet({
 
                 <motion.div
                   role="alertdialog"
-                  aria-labelledby="confirm-title"
-                  aria-describedby="confirm-desc"
+                  aria-labelledby="confirm-add-debt-title"
+                  aria-describedby="confirm-add-debt-desc"
                   initial={{ opacity: 0, scale: 0.92, y: 16 }}
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.92, y: 16 }}
                   transition={{ type: "spring", stiffness: 360, damping: 30 }}
                   className="fixed inset-x-6 bottom-[calc(env(safe-area-inset-bottom)+24px)] z-[60] rounded-2xl border border-white/[0.08] bg-[#111827] p-5 shadow-2xl"
                 >
-                  <p id="confirm-title" className="mb-1 text-sm font-bold text-[#F1F5F9]">
+                  <p id="confirm-add-debt-title" className="mb-1 text-sm font-bold text-[#F1F5F9]">
                     Buang perubahan?
                   </p>
-                  <p id="confirm-desc" className="mb-5 text-xs text-[#64748B]">
+                  <p id="confirm-add-debt-desc" className="mb-5 text-xs text-[#64748B]">
                     Data yang sudah diisi akan hilang.
                   </p>
 

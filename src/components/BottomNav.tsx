@@ -1,11 +1,10 @@
-//src/components/BottomNav.tsx
-
 "use client"
 
 import { motion } from "framer-motion"
 import { Home, Activity, BarChart3, User } from "lucide-react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { INTERACTIVE_SPRING } from "@/lib/motion"
 import { cn } from "@/lib/utils"
 import { ROUTES } from "@/lib/routes"
 
@@ -27,9 +26,10 @@ export default function BottomNav() {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-      <div className="absolute inset-0 bg-[#0B1120]/95 backdrop-blur-2xl border-t border-white/[0.06]" />
+      <div className="absolute inset-0 border-t border-white/[0.08] bg-[#030712]/94 backdrop-blur-2xl" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/18 to-transparent" />
 
-      <div className="relative flex items-center justify-around px-2 pt-2.5 pb-2">
+      <div className="relative flex items-center justify-around px-2 pb-2 pt-2.5">
         {NAV_ITEMS.map(({ id, label, icon: Icon, href }) => {
           const isActive = pathname === href || pathname.startsWith(`${href}/`)
 
@@ -38,32 +38,32 @@ export default function BottomNav() {
               key={id}
               href={href}
               onClick={triggerHaptic}
-              className="flex flex-col items-center justify-center gap-1 w-16 py-1.5 relative"
+              className="relative flex w-16 flex-col items-center justify-center gap-1 py-1.5"
               style={{ touchAction: "manipulation" }}
             >
-              {isActive && (
+              {isActive ? (
                 <motion.div
                   layoutId="navGlow"
-                  className="absolute inset-0 rounded-2xl bg-amber-400/10 border border-amber-400/20"
-                  transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                  transition={INTERACTIVE_SPRING}
+                  className="absolute inset-0 rounded-[18px] border border-cyan-400/18 bg-cyan-500/10"
                 />
-              )}
+              ) : null}
 
               <div className="relative z-10">
                 <Icon
                   size={20}
                   className={cn(
                     "transition-colors duration-200",
-                    isActive ? "text-amber-400 scale-105" : "text-[#64748B]"
+                    isActive ? "text-[#38BDF8] scale-105" : "text-slate-500"
                   )}
-                  strokeWidth={isActive ? 2.5 : 1.8}
+                  strokeWidth={isActive ? 2.4 : 1.8}
                 />
               </div>
 
               <span
                 className={cn(
-                  "text-[9px] font-bold tracking-wide relative z-10 transition-colors duration-200",
-                  isActive ? "text-amber-400" : "text-[#64748B]"
+                  "relative z-10 text-[9px] font-semibold tracking-wide transition-colors duration-200",
+                  isActive ? "text-[#38BDF8]" : "text-slate-500"
                 )}
               >
                 {label}
@@ -75,4 +75,3 @@ export default function BottomNav() {
     </nav>
   )
 }
-

@@ -1,157 +1,464 @@
-//src/components/BalanceCard.tsx
 "use client"
 
-import { useRef, useState } from "react"
-import { motion, useMotionValue, useSpring } from "framer-motion"
-import { Eye, EyeOff, RefreshCw, TrendingUp, Users } from "lucide-react"
-import { formatRupiah } from "@/lib/utils"
+import { useMemo, useState, useEffect, useRef, type MouseEvent } from "react"
+import { motion, AnimatePresence, useMotionValue, useSpring, useReducedMotion } from "framer-motion"
+import {
+  Eye,
+  EyeOff,
+  RefreshCw,
+  TrendingUp,
+  TrendingDown,
+  Coins,
+  HandCoins,
+  ArrowUpRight,
+  ArrowDownLeft,
+} from "lucide-react"
+import { IOS_SPRING } from "@/lib/motion"
+import { cn, formatRupiah, formatRupiahCompact } from "@/lib/utils"
+import SparklineGraph from "./SparklineGraph"
+
+type FinancialPeriod = "7D" | "30D" | "3B"
 
 interface BalanceCardProps {
   totalWealth: number
   walletTotal: number
   piutang: number
+  hutang: number
   onSync?: () => void
   isSyncing?: boolean
+  isChartLoading: boolean
+  trendPoints?: number[]
+  onPeriodChange?: (period: FinancialPeriod) => void
+}
+
+const BALANCE_CARD_SPRING = { type: "spring" as const, stiffness: 380, damping: 28 }
+
+const TEXT_FADE = {
+  initial: { opacity: 0, y: 6, filter: "blur(2px)" },
+  animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+  exit: { opacity: 0, y: -6, filter: "blur(2px)" },
+}
+
+const triggerHaptic = (ms: number | number[]) => {
+  if (typeof navigator !== "undefined" && navigator.vibrate) {
+    navigator.vibrate(ms)
+  }
+}
+
+function SubBalanceSkeleton() {
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-3">
+      <div className="flex gap-3 overflow-x-hidden pb-1">
+        {[1, 2, 3].map((item) => (
+          <div
+            key={item}
+            className="relative flex min-h-[100px] w-[calc(50%-6px)] shrink-0 flex-col justify-between overflow-hidden rounded-[22px] border border-white/[0.04] bg-slate-950/20 p-4"
+          >
+            <motion.div
+              className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.03] to-transparent"
+              animate={{ x: ["-100%", "100%"] }}
+              transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+            />
+            <div className="flex items-center gap-2.5">
+              <div className="h-8 w-8 rounded-xl border border-white/[0.05] bg-white/[0.03]" />
+              <div className="h-3 w-12 rounded-md bg-white/[0.03]" />
+            </div>
+            <div className="mt-3">
+              <div className="h-5 w-24 rounded-lg bg-white/[0.03]" />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center justify-center gap-1.5 pt-0.5">
+        <div className="h-1 w-3 rounded-full bg-white/[0.06]" />
+        <div className="h-1 w-1.5 rounded-full bg-white/[0.03]" />
+      </div>
+    </motion.div>
+  )
 }
 
 export default function BalanceCard({
   totalWealth,
   walletTotal,
   piutang,
+  hutang,
   onSync,
   isSyncing = false,
+  isChartLoading,
+  trendPoints = [],
+  onPeriodChange,
 }: BalanceCardProps) {
   const [hidden, setHidden] = useState(false)
-  const cardRef = useRef<HTMLDivElement>(null)
+  const [isMounted, setIsMounted] = useState(false)
+  const [lastSynced, setLastSynced] = useState("Baru saja")
+  const [activeSlide, setActiveSlide] = useState(0)
+  const [selectedPeriod, setSelectedPeriod] = useState<FinancialPeriod>("7D")
+  const scrollRef = useRef<HTMLDivElement>(null)
 
-  const rotateX = useSpring(useMotionValue(0), { stiffness: 300, damping: 30 })
-  const rotateY = useSpring(useMotionValue(0), { stiffness: 300, damping: 30 })
+  const [displayWealth, setDisplayWealth] = useState("••••••••")
+  const motionWealth = useMotionValue(totalWealth)
+  const springWealth = useSpring(motionWealth, {
+    stiffness: 48,
+    damping: 15,
+    restDelta: 0.01,
+  })
 
-  const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    const rect = cardRef.current?.getBoundingClientRect()
-    if (!rect) return
+  const shouldReduceMotion = useReducedMotion()
 
-    const centerX = rect.left + rect.width / 2
-    const centerY = rect.top + rect.height / 2
+  const rawX = useMotionValue(0)
+  const rawY = useMotionValue(0)
+  const springX = useSpring(rawX, { stiffness: 100, damping: 24 })
+  const springY = useSpring(rawY, { stiffness: 100, damping: 24 })
 
-    rotateY.set(((event.clientX - centerX) / rect.width) * 10)
-    rotateX.set(-((event.clientY - centerY) / rect.height) * 10)
+  useEffect(() => {
+    setIsMounted(true)
+    const savedPrivacy = localStorage.getItem("balance_privacy")
+    if (savedPrivacy === "hidden") setHidden(true)
+
+    const onVisChange = () => {
+      if (document.hidden) setHidden(true)
+    }
+
+    document.addEventListener("visibilitychange", onVisChange)
+    return () => document.removeEventListener("visibilitychange", onVisChange)
+  }, [])
+
+  useEffect(() => {
+    motionWealth.set(totalWealth)
+  }, [totalWealth, motionWealth])
+
+  useEffect(() => {
+    const unsubscribe = springWealth.on("change", (latest) => {
+      if (isMounted && !hidden) {
+        setDisplayWealth(formatRupiah(Math.round(latest)))
+      }
+    })
+
+    return () => unsubscribe()
+  }, [springWealth, isMounted, hidden])
+
+  useEffect(() => {
+    if (!isMounted || hidden) {
+      setDisplayWealth("••••••••")
+    } else {
+      setDisplayWealth(formatRupiah(Math.round(springWealth.get())))
+    }
+  }, [hidden, isMounted, springWealth])
+
+  const handlePrivacyToggle = () => {
+    triggerHaptic(10)
+    setHidden((prev) => {
+      const nextState = !prev
+      localStorage.setItem("balance_privacy", nextState ? "hidden" : "visible")
+      return nextState
+    })
   }
 
-  const handleMouseLeave = () => {
-    rotateX.set(0)
-    rotateY.set(0)
+  const handleSync = async () => {
+    if (!onSync || isSyncing) return
+
+    triggerHaptic(20)
+    await onSync()
+    const now = new Date()
+    setLastSynced(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`)
+    triggerHaptic([10, 30, 10])
   }
 
-  const maskedAmount = hidden ? "••••••••" : formatRupiah(totalWealth)
+  const handlePeriodChangeClick = (period: FinancialPeriod) => {
+    if (period === selectedPeriod || isSyncing) return
+
+    triggerHaptic(12)
+    setSelectedPeriod(period)
+    onPeriodChange?.(period)
+  }
+
+  const handleCardMouseMove = (event: MouseEvent<HTMLElement>) => {
+    if (shouldReduceMotion || window.matchMedia("(pointer: coarse)").matches) return
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    rawX.set(((event.clientX - rect.left - rect.width / 2) / rect.width) * 5)
+    rawY.set(((event.clientY - rect.top - rect.height / 2) / rect.height) * 3)
+  }
+
+  const handleCardMouseLeave = () => {
+    rawX.set(0)
+    rawY.set(0)
+  }
+
+  const trendPct = useMemo(() => {
+    if (!trendPoints || trendPoints.length < 2) return 0
+    const first = trendPoints[0]
+    const last = trendPoints[trendPoints.length - 1]
+    return first === 0 ? 0 : ((last - first) / Math.abs(first)) * 100
+  }, [trendPoints])
+
+  const isPositive = trendPct >= 0
+  const strokeColor = isPositive ? "#10B981" : "#EF4444"
+  const hasTrend = trendPoints && trendPoints.length >= 2
 
   return (
-    <motion.div
-      ref={cardRef}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={handleMouseLeave}
+    <motion.section
       style={{
-        rotateX,
-        rotateY,
-        transformPerspective: 800,
-        background: "linear-gradient(135deg, #1e3a5f 0%, #0f2442 40%, #0a1628 100%)",
+        x: springX,
+        y: springY,
+        background:
+          "radial-gradient(ellipse 140% 70% at 75% -10%, rgba(56,189,248,0.11) 0%, #0B1528 62%)",
       }}
-      initial={{ opacity: 0, y: 32, scale: 0.94 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ duration: 0.6, ease: [0.23, 1, 0.32, 1], delay: 0.1 }}
-      className="relative overflow-hidden rounded-[28px] p-6 mx-0 cursor-default select-none"
+      onMouseMove={handleCardMouseMove}
+      onMouseLeave={handleCardMouseLeave}
+      initial={{ opacity: 0, y: 15 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={IOS_SPRING}
+      aria-label="Kartu Saldo Utama Finansial"
+      className="relative w-full overflow-hidden rounded-[24px] border border-white/[0.08] shadow-[0_16px_44px_-22px_rgba(0,0,0,0.45)]"
     >
-      <motion.div
-        animate={{ x: ["-100%", "200%"] }}
-        transition={{ duration: 3.5, repeat: Infinity, repeatDelay: 4, ease: "easeInOut" }}
-        className="absolute inset-0 w-1/2 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent skew-x-12 pointer-events-none"
-      />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent" />
 
-      <div className="absolute -top-20 -right-20 w-56 h-56 rounded-full border border-amber-400/10 pointer-events-none" />
-      <div className="absolute -top-10 -right-10 w-36 h-36 rounded-full border border-amber-400/[0.07] pointer-events-none" />
-
-      <div
-        className="absolute inset-0 opacity-[0.035] pointer-events-none"
-        style={{
-          backgroundImage: "radial-gradient(circle, #94a3b8 1px, transparent 1px)",
-          backgroundSize: "20px 20px",
-        }}
-      />
-
-      <div className="relative z-10">
-        <div className="flex items-start justify-between mb-5">
-          <div>
-            <p className="text-[10px] font-bold tracking-[0.22em] text-slate-400 uppercase mb-1">Total Saldo</p>
+      <div className="relative z-10 flex flex-col gap-5 p-5">
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <h2 className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">Total Kekayaan</h2>
+            <p className="text-[9px] font-medium text-slate-600 tabular-nums">Diperbarui: {lastSynced}</p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5 rounded-xl border border-white/[0.05] bg-white/[0.02] p-1 shadow-[inset_0_1px_1px_rgba(255,255,255,0.02)] backdrop-blur-md">
             <motion.button
-              whileTap={{ scale: 0.88 }}
-              onClick={() => setHidden((prev) => !prev)}
-              className="w-8 h-8 rounded-xl bg-white/[0.07] border border-white/[0.08] flex items-center justify-center"
+              whileTap={{ scale: 0.92 }}
+              transition={BALANCE_CARD_SPRING}
+              onClick={handlePrivacyToggle}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:text-slate-200"
               aria-label={hidden ? "Tampilkan saldo" : "Sembunyikan saldo"}
             >
-              {hidden ? (
-                <EyeOff size={13} className="text-slate-400" />
-              ) : (
-                <Eye size={13} className="text-slate-400" />
-              )}
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span
+                  key={hidden ? "off" : "on"}
+                  initial={{ opacity: 0, scale: 0.7 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.7 }}
+                  transition={{ duration: 0.1 }}
+                >
+                  {hidden ? <EyeOff size={13} /> : <Eye size={13} />}
+                </motion.span>
+              </AnimatePresence>
             </motion.button>
 
+            <div className="h-3 w-px bg-white/[0.06]" />
+
             <motion.button
-              whileTap={{ scale: 0.88 }}
-              onClick={onSync}
+              whileTap={{ scale: 0.92 }}
+              transition={BALANCE_CARD_SPRING}
+              onClick={handleSync}
               disabled={isSyncing}
-              className="flex items-center gap-1.5 px-3 h-8 rounded-xl bg-white/[0.07] border border-white/[0.08] disabled:opacity-50"
-              aria-label="Sinkronkan data"
+              className="flex h-7 items-center gap-1 rounded-lg px-2 text-[10px] font-bold text-slate-400 transition-colors hover:text-slate-200 disabled:opacity-30"
             >
-              <RefreshCw size={11} className={`text-slate-400 ${isSyncing ? "animate-spin" : ""}`} />
-              <span className="text-[10px] font-bold text-slate-400 tracking-widest uppercase hidden sm:block">
-                {isSyncing ? "..." : "Sync"}
-              </span>
+              <RefreshCw size={11} className={isSyncing ? "animate-spin text-cyan-400" : "text-slate-400"} />
+              <span>Sync</span>
             </motion.button>
           </div>
         </div>
 
-        <motion.div
-          key={totalWealth}
-          initial={{ opacity: 0, y: 6 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.35 }}
-          className="mb-9"
-        >
-          <p className="text-[24px] font-black text-white tracking-tight leading-none">{maskedAmount}</p>
-        </motion.div>
+        <div className="flex items-end justify-between gap-3">
+          <div className="relative min-w-0 flex-1">
+            <AnimatePresence mode="wait">
+              <motion.p
+                key={hidden ? "hidden" : "visible"}
+                variants={TEXT_FADE}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: 0.15 }}
+                className={cn(
+                  "text-3xl font-bold tracking-tight tabular-nums transition-all duration-300",
+                  hidden
+                    ? "select-none tracking-[0.2em] text-slate-800"
+                    : "bg-gradient-to-r from-white via-slate-100 to-cyan-100 bg-clip-text text-transparent"
+                )}
+              >
+                {displayWealth}
+              </motion.p>
+            </AnimatePresence>
 
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            {
-              label: "E-Wallet",
-              value: hidden ? "••••" : formatRupiah(walletTotal),
-              icon: <TrendingUp size={11} />,
-              color: "text-sky-400",
-            },
-            {
-              label: "Piutang",
-              value: hidden ? "••••" : formatRupiah(piutang),
-              icon: <Users size={11} />,
-              color: "text-amber-400",
-            },
-          ].map((stat) => (
-            <div
-              key={stat.label}
-              className="rounded-2xl bg-white/[0.05] border border-white/[0.07] p-3.5 backdrop-blur-sm"
+            {isSyncing ? (
+              <motion.div
+                className="pointer-events-none absolute inset-0 z-20 bg-gradient-to-r from-transparent via-cyan-400/10 to-transparent mix-blend-screen"
+                animate={{ x: ["-100%", "100%"] }}
+                transition={{ repeat: Infinity, duration: 1.2, ease: "linear" }}
+              />
+            ) : null}
+          </div>
+
+          {hasTrend ? (
+            <motion.div
+              initial={{ opacity: 0, x: 8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={BALANCE_CARD_SPRING}
+              style={{
+                boxShadow: isPositive
+                  ? "0 2px 10px rgba(16,185,129,0.12), inset 0 1px 0 rgba(255,255,255,0.05)"
+                  : "0 2px 10px rgba(239,110,110,0.10), inset 0 1px 0 rgba(255,255,255,0.05)",
+              }}
+              className={cn(
+                "mb-0.5 flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-extrabold tabular-nums backdrop-blur-md",
+                isPositive
+                  ? "border-emerald-500/20 bg-emerald-500/[0.08] text-emerald-400"
+                  : "border-rose-500/20 bg-rose-500/[0.08] text-rose-400"
+              )}
             >
-              <div className="flex items-center gap-1.5 mb-2">
-                <span className={stat.color}>{stat.icon}</span>
-                <p className="text-[9px] font-bold tracking-[0.18em] text-slate-500 uppercase">{stat.label}</p>
-              </div>
-              <p className="text-[16px] font-black text-white tracking-tight leading-none">{stat.value}</p>
-            </div>
-          ))}
+              {isPositive ? <TrendingUp size={10} strokeWidth={2.5} /> : <TrendingDown size={10} strokeWidth={2.5} />}
+              <span>{Math.abs(trendPct).toFixed(1)}%</span>
+            </motion.div>
+          ) : null}
         </div>
+
+        <div className="flex items-center justify-between border-t border-white/[0.04] pt-3">
+          <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-slate-500">Performa Aset</p>
+
+          <div className="relative flex rounded-lg border border-white/[0.04] bg-slate-950/60 p-0.5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.5)]">
+            {(["7D", "30D", "3B"] as const).map((periodItem) => {
+              const isSelected = selectedPeriod === periodItem
+
+              return (
+                <button
+                  key={periodItem}
+                  type="button"
+                  disabled={isSyncing}
+                  onClick={() => handlePeriodChangeClick(periodItem)}
+                  className={cn(
+                    "relative z-10 px-2.5 py-1 text-[9px] font-black tracking-wider transition-colors duration-300 disabled:opacity-40",
+                    isSelected ? "text-cyan-400" : "text-slate-500 hover:text-slate-300"
+                  )}
+                >
+                  <span className="relative z-20">{periodItem}</span>
+                  {isSelected ? (
+                    <motion.div
+                      layoutId="activePeriodIndicator"
+                      className="absolute inset-0 z-10 rounded-md border border-white/[0.07] bg-white/[0.05] shadow-[inset_0_1px_1px_rgba(255,255,255,0.03)]"
+                      transition={{ type: "spring", stiffness: 430, damping: 32 }}
+                    />
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <SparklineGraph
+          trendPoints={trendPoints}
+          isPositive={isPositive}
+          period={selectedPeriod}
+          strokeColor={strokeColor}
+          isLoading={isChartLoading}
+        />
+
+        {!isMounted ? (
+          <SubBalanceSkeleton />
+        ) : (
+          <div className="flex flex-col gap-3">
+            <div
+              ref={scrollRef}
+              onScroll={(event) => {
+                const target = event.currentTarget
+                const isAtEnd = target.scrollLeft + target.clientWidth >= target.scrollWidth - 15
+                setActiveSlide(isAtEnd ? 1 : 0)
+              }}
+              className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden"
+              style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+            >
+              <div className="flex min-h-[100px] w-[calc(50%-6px)] shrink-0 snap-start flex-col justify-between rounded-[22px] border border-emerald-500/15 bg-gradient-to-b from-emerald-500/[0.06] to-transparent p-4 shadow-sm backdrop-blur-md">
+                <div className="flex items-center gap-2.5">
+                  <div className="relative shrink-0">
+                    <div className="absolute inset-0 rounded-xl bg-emerald-500/20 blur-[6px]" />
+                    <div className="relative flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-500/25 bg-slate-950/90 shadow-[inset_0_1px_1px_rgba(255,255,255,0.1)]">
+                      <Coins size={14} className="text-emerald-400" strokeWidth={2.2} />
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Likuid</p>
+                </div>
+                <div className="mt-3">
+                  <AnimatePresence mode="wait">
+                    <motion.p
+                      key={hidden ? "hidden-liquid" : "visible-liquid"}
+                      variants={TEXT_FADE}
+                      initial="initial"
+                      animate="animate"
+                      exit="exit"
+                      transition={{ duration: 0.12 }}
+                      className="truncate text-[15px] font-bold tracking-tight tabular-nums text-emerald-300"
+                    >
+                      {hidden ? "••••" : formatRupiahCompact(walletTotal)}
+                    </motion.p>
+                  </AnimatePresence>
+                </div>
+              </div>
+
+              <div className="flex min-h-[100px] w-[calc(50%-6px)] shrink-0 snap-start flex-col justify-between rounded-[22px] border border-amber-500/15 bg-gradient-to-b from-amber-500/[0.06] to-transparent p-4 shadow-sm backdrop-blur-md">
+                <div className="flex items-center gap-2.5">
+                  <div className="relative shrink-0">
+                    <div className="absolute inset-0 rounded-xl bg-amber-500/20 blur-[6px]" />
+                    <div className="relative flex h-8 w-8 items-center justify-center rounded-xl border border-amber-500/25 bg-slate-950/90 shadow-[inset_0_1px_1px_rgba(255,255,255,0.1)]">
+                      <HandCoins size={14} className="text-amber-400" strokeWidth={2.2} />
+                      <div className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-md border border-slate-950 bg-amber-500 shadow-sm">
+                        <ArrowUpRight size={10} className="text-slate-950" strokeWidth={3} />
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Piutang</p>
+                </div>
+                <div className="mt-3">
+                  <AnimatePresence mode="wait">
+                    <motion.p
+                      key={hidden ? "hidden-piutang" : "visible-piutang"}
+                      variants={TEXT_FADE}
+                      initial="initial"
+                      animate="animate"
+                      exit="exit"
+                      transition={{ duration: 0.12 }}
+                      className="truncate text-[15px] font-bold tracking-tight tabular-nums text-amber-300"
+                    >
+                      {hidden ? "••••" : formatRupiahCompact(piutang)}
+                    </motion.p>
+                  </AnimatePresence>
+                </div>
+              </div>
+
+              <div className="flex min-h-[100px] w-[calc(50%-6px)] shrink-0 snap-start flex-col justify-between rounded-[22px] border border-rose-500/15 bg-gradient-to-b from-rose-500/[0.06] to-transparent p-4 shadow-sm backdrop-blur-md">
+                <div className="flex items-center gap-2.5">
+                  <div className="relative shrink-0">
+                    <div className="absolute inset-0 rounded-xl bg-rose-500/20 blur-[6px]" />
+                    <div className="relative flex h-8 w-8 items-center justify-center rounded-xl border border-rose-500/25 bg-slate-950/90 shadow-[inset_0_1px_1px_rgba(255,255,255,0.1)]">
+                      <HandCoins size={14} className="text-rose-400" strokeWidth={2.2} />
+                      <div className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-md border border-slate-950 bg-rose-500 shadow-sm">
+                        <ArrowDownLeft size={10} className="text-slate-950" strokeWidth={3} />
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Hutang</p>
+                </div>
+                <div className="mt-3">
+                  <AnimatePresence mode="wait">
+                    <motion.p
+                      key={hidden ? "hidden-hutang" : "visible-hutang"}
+                      variants={TEXT_FADE}
+                      initial="initial"
+                      animate="animate"
+                      exit="exit"
+                      transition={{ duration: 0.12 }}
+                      className="truncate text-[15px] font-bold tracking-tight tabular-nums text-rose-300"
+                    >
+                      {hidden ? "••••" : formatRupiahCompact(hutang)}
+                    </motion.p>
+                  </AnimatePresence>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center gap-1.5 pt-0.5">
+              <div className={cn("h-1 rounded-full transition-all duration-300", activeSlide === 0 ? "w-3 bg-cyan-400/80" : "w-1.5 bg-white/10")} />
+              <div className={cn("h-1 rounded-full transition-all duration-300", activeSlide === 1 ? "w-3 bg-cyan-400/80" : "w-1.5 bg-white/10")} />
+            </div>
+          </div>
+        )}
       </div>
-    </motion.div>
+    </motion.section>
   )
 }
-

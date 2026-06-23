@@ -1,4 +1,3 @@
-//src/app/add-account/AddAccountClient.tsx
 "use client"
 
 import { type ChangeEvent, type FormEvent, type ReactNode, useCallback, useMemo, useRef, useState } from "react"
@@ -24,13 +23,13 @@ import { ROUTES } from "@/lib/routes"
 import { cn } from "@/lib/utils"
 import { ACCOUNT_STYLE } from "@/app/dashboard/types"
 
-type BankOption = {
-  type: AccountTypeValue
+type BankListItem = {
+  type: string
   label: string
   group: string
 }
 
-const BANK_LIST: BankOption[] = [
+const BANK_LIST = [
   { type: "BCA", label: "BCA", group: "Bank Utama" },
   { type: "Mandiri", label: "Mandiri", group: "Bank Utama" },
   { type: "BNI", label: "BNI", group: "Bank Utama" },
@@ -98,7 +97,7 @@ const BANK_LIST: BankOption[] = [
   { type: "BankPensiun", label: "Bank Pensiunan (Mantap)", group: "Bank Lainnya" },
   { type: "BankKoperasi", label: "Bank Koperasi", group: "Bank Lainnya" },
   { type: "BankPembangunan", label: "Bank Pembangunan", group: "Bank Lainnya" },
-]
+] as const
 
 type AccountTypeValue = Database["public"]["Tables"]["accounts"]["Insert"]["type"]
 type FormStep = "category" | "subtype" | "details" | "success"
@@ -210,7 +209,7 @@ export default function AddAccountClient() {
   }, [bankSearch])
 
   const groupedBanks = useMemo(() => {
-    const groups: Record<string, BankOption[]> = {}
+    const groups: Record<string, BankListItem[]> = {}
 
     filteredBanks.forEach((bank) => {
       if (!groups[bank.group]) groups[bank.group] = []
@@ -274,14 +273,14 @@ export default function AddAccountClient() {
         is_default: formData.is_default,
       }
 
-      const { error } = await supabase.from("accounts").insert(payload)
+      const { error } = await (supabase.from("accounts") as any).insert(payload)
       if (error) throw error
 
       toast.success("Akun berhasil ditambahkan! 🎉")
       setStep("success")
 
       setTimeout(() => {
-        router.refresh()
+        ;(router as { refresh?: () => void }).refresh?.()
         router.push(ROUTES.dashboard)
       }, 1200)
     } catch (error: any) {

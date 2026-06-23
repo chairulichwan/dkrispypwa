@@ -1,11 +1,11 @@
-// src/components/AccountCards.tsx
 "use client"
 
-import { useState } from "react"
-import { motion, AnimatePresence } from "framer-motion"
+import { type ReactNode, useRef, useState } from "react"
+import { AnimatePresence, motion } from "framer-motion"
 import { ChevronRight, Plus, CreditCard, Eye, EyeOff, Copy, Check } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { ACCOUNT_STYLE, type Account, type AccountType } from "@/app/dashboard/types"
+import { INTERACTIVE_SPRING, TAP_FEEDBACK, EASE_OUT_SMOOTH } from "@/lib/motion"
 import { formatRupiah, cn, maskAccountNumber, formatAccountNumber } from "@/lib/utils"
 import { ROUTES, accountDetailHref } from "@/lib/routes"
 import toast from "react-hot-toast"
@@ -17,38 +17,44 @@ interface AccountCardsProps {
 }
 
 const FALLBACK_STYLE = {
-  bgColor: "bg-gray-50",
-  iconBg: "bg-gray-100 text-gray-600",
-  gradient: "from-gray-500/20 to-gray-500/10",
-  border: "border-gray-500/20",
+  bgColor: "bg-slate-950",
+  iconBg: "bg-white/[0.08] text-slate-200",
+  gradient: "from-slate-400/20 to-slate-700/10",
+  border: "border-white/[0.08]",
   accentColor: "#6b7280",
   icon: <CreditCard size={18} />,
   label: "Lainnya",
 }
 
+const LONG_PRESS_MS = 420
+
 export default function AccountCards({ accounts, onCardClick, onLongPress }: AccountCardsProps) {
   const router = useRouter()
 
   return (
-    <section className="pb-2">
-      <div className="flex items-center justify-between mb-4 px-1">
-        <div className="flex items-center gap-2.5">
-          <div className="w-[3px] h-5 rounded-full bg-gradient-to-b from-amber-400 to-amber-600" />
-          <h2 className="text-[15px] font-bold text-white tracking-tight">Akun Saya</h2>
-          <span className="px-1.5 py-0.5 rounded-md bg-white/[0.06] text-[9px] font-bold text-slate-400 border border-white/[0.06]">
-            {accounts.length}
-          </span>
+    <section className="space-y-5">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2.5">
+            <div className="h-5 w-[3px] rounded-full bg-[#38BDF8]" />
+            <h2 className="text-[15px] font-semibold tracking-tight text-white">Akun Saya</h2>
+            <span className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[10px] font-semibold text-slate-300">
+              {accounts.length}
+            </span>
+          </div>
+          <p className="mt-1 pl-5 text-[11px] text-slate-400">Tap untuk detail, hold singkat untuk shortcut premium</p>
         </div>
 
         <button
+          type="button"
           onClick={() => router.push(ROUTES.accountsList)}
-          className="flex items-center gap-0.5 text-[10px] font-bold text-amber-400/80 tracking-wide hover:text-amber-400 transition-colors"
+          className="inline-flex items-center gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[11px] font-semibold text-slate-300 transition-colors hover:border-white/[0.14] hover:text-white"
         >
           Semua <ChevronRight size={13} />
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="-mx-1 flex snap-x snap-mandatory gap-4 overflow-x-auto px-1 pb-1 scrollbar-hide">
         {accounts.map((account, index) => {
           const cfg = ACCOUNT_STYLE[account.type as AccountType] ?? FALLBACK_STYLE
 
@@ -67,15 +73,21 @@ export default function AccountCards({ accounts, onCardClick, onLongPress }: Acc
         })}
 
         <motion.button
+          type="button"
+          whileTap={TAP_FEEDBACK}
+          transition={INTERACTIVE_SPRING}
           onClick={() => router.push(ROUTES.addAccount)}
-          whileTap={{ scale: 0.96 }}
-          whileHover={{ scale: 1.02 }}
-          className="rounded-[25px] border-2 border-dashed border-white/[0.08] bg-white/[0.02] flex flex-col items-center justify-center gap-1.5 min-h-[140px] text-slate-500 hover:text-white hover:border-white/20 hover:bg-white/[0.04] transition-all cursor-pointer"
+          className="min-w-[58%] snap-center rounded-[24px] border border-dashed border-white/[0.08] bg-white/[0.03] p-4 text-left text-slate-300 sm:min-w-[220px]"
         >
-          <div className="w-9 h-9 rounded-[14px] bg-white/[0.06] flex items-center justify-center">
-            <Plus size={18} />
+          <div className="flex h-full flex-col justify-between gap-10">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-[#38BDF8]">
+              <Plus size={18} />
+            </div>
+            <div>
+              <p className="text-base font-semibold tracking-tight text-white">Tambah akun baru</p>
+              <p className="mt-1 text-sm leading-5 text-slate-400">Buka onboarding akun dalam satu langkah cepat.</p>
+            </div>
           </div>
-          <span className="text-[10px] font-bold">Tambah</span>
         </motion.button>
       </div>
     </section>
@@ -96,7 +108,7 @@ function AccountCardItem({
     gradient: string
     border: string
     accentColor: string
-    icon: React.ReactNode
+    icon: ReactNode
     label: string
   }
   index: number
@@ -105,9 +117,19 @@ function AccountCardItem({
 }) {
   const [showNumber, setShowNumber] = useState(false)
   const [copied, setCopied] = useState(false)
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const suppressClickRef = useRef(false)
+  const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
 
   const balance = account.balance ?? 0
   const isEmpty = balance === 0
+
+  const clearLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current)
+      longPressTimerRef.current = null
+    }
+  }
 
   const handleCopy = async (event: React.MouseEvent) => {
     event.stopPropagation()
@@ -134,15 +156,38 @@ function AccountCardItem({
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20, scale: 0.93 }}
+      initial={{ opacity: 0, y: 18, scale: 0.98 }}
       animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ duration: 0.45, delay: 0.07 * index, ease: [0.23, 1, 0.32, 1] }}
-      whileTap={{ scale: 0.96 }}
-      whileHover={{ y: -2 }}
-      onClick={onNavigate}
+      transition={{ duration: 0.42, delay: 0.05 * index, ease: EASE_OUT_SMOOTH }}
+      whileTap={TAP_FEEDBACK}
+      onPointerDown={(event) => {
+        if (!onLongPress) return
+
+        lastPointerRef.current = { x: event.clientX, y: event.clientY }
+        clearLongPress()
+        longPressTimerRef.current = setTimeout(() => {
+          suppressClickRef.current = true
+          onLongPress(lastPointerRef.current)
+        }, LONG_PRESS_MS)
+      }}
+      onPointerMove={(event) => {
+        lastPointerRef.current = { x: event.clientX, y: event.clientY }
+      }}
+      onPointerUp={clearLongPress}
+      onPointerCancel={clearLongPress}
+      onPointerLeave={clearLongPress}
       onContextMenu={(event) => {
         event.preventDefault()
-        onLongPress?.({ x: event.clientX, y: event.clientY })
+        if (!onLongPress) return
+        suppressClickRef.current = true
+        onLongPress({ x: event.clientX, y: event.clientY })
+      }}
+      onClick={() => {
+        if (suppressClickRef.current) {
+          suppressClickRef.current = false
+          return
+        }
+        onNavigate()
       }}
       role="button"
       tabIndex={0}
@@ -154,101 +199,120 @@ function AccountCardItem({
       }}
       aria-label={`${cfg.label} ${account.name}, saldo ${isEmpty ? "kosong" : formatRupiah(balance)}`}
       className={cn(
-        "relative overflow-hidden rounded-[25px] p-3 border backdrop-blur-sm cursor-pointer",
-        "bg-gradient-to-br transition-all duration-300 outline-none",
-        "focus-visible:ring-2 focus-visible:ring-amber-400/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0a0e1a]",
-        cfg.gradient,
+        "relative min-w-[82%] snap-center overflow-hidden rounded-[24px] border bg-[#0B1528] p-4 outline-none sm:min-w-[320px]",
+        "focus-visible:ring-2 focus-visible:ring-[#38BDF8]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#030712]",
         cfg.border
       )}
+      style={{ boxShadow: `0 18px 42px -30px ${cfg.accentColor}88` }}
     >
-      <div className={cn("absolute inset-0 opacity-60 rounded-[22px] pointer-events-none", cfg.gradient)} />
-      <div
-        className="absolute -top-8 -right-8 w-24 h-24 rounded-full blur-2xl opacity-20 pointer-events-none"
-        style={{ background: cfg.accentColor }}
-      />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.04),transparent_38%,rgba(56,189,248,0.04))]" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
 
       <div className="relative z-10">
-        <div className="flex items-start justify-between mb-2">
-          <div className={cn("w-9 h-9 rounded-[14px] flex items-center justify-center border border-white/[0.08]", cfg.iconBg)}>
-            {cfg.icon}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/[0.08]"
+              style={{ backgroundColor: `${cfg.accentColor}22`, color: cfg.accentColor }}
+            >
+              {cfg.icon}
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">{cfg.label}</p>
+              <p className="truncate text-base font-semibold tracking-tight text-white">{account.name}</p>
+            </div>
           </div>
 
-          {account.is_default && (
-            <div className="w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.6)]" />
-          )}
+          {account.is_default ? (
+            <span className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[10px] font-medium text-slate-300">
+              Utama
+            </span>
+          ) : null}
         </div>
 
-        <p className="text-[8px] font-bold tracking-[0.10em] text-slate-500 uppercase mb-0.5">{cfg.label}</p>
-        <p className="text-[13px] font-bold text-slate-300 mb-1 truncate">{account.name}</p>
+        <div className="mt-5 flex items-end justify-between gap-3">
+          <div>
+            <p className="text-sm text-slate-300">Saldo tersedia</p>
+            <p className="mt-1 text-[28px] font-medium leading-none tracking-tight tabular-nums text-white">
+              {isEmpty ? "—" : formatRupiah(balance)}
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Akun</p>
+            <p className="mt-1 text-sm text-slate-300">Tap buka detail</p>
+          </div>
+        </div>
 
-        <p
-          className={cn(
-            "text-[12px] font-bold tracking-tight leading-none tabular-nums mb-2",
-            isEmpty ? "text-slate-500" : "text-white"
-          )}
-        >
-          {isEmpty ? "—" : formatRupiah(balance)}
-        </p>
+        {account.account_number ? (
+          <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.03] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Nomor akun</p>
+                <p className="mt-1 truncate font-mono text-sm tracking-wide text-slate-300">{displayNumber}</p>
+              </div>
 
-        {account.account_number && (
-          <div className="pt-2 border-t border-white/[0.06]">
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-[9px] font-mono text-slate-400 tracking-wider tabular-nums truncate">
-                {displayNumber}
-              </span>
-
-              <div className="flex items-center gap-0.5 shrink-0">
+              <div className="flex items-center gap-1 shrink-0">
                 <button
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onPointerUp={(event) => event.stopPropagation()}
                   onClick={toggleVisibility}
-                  className="p-1 rounded-md hover:bg-white/[0.08] transition-colors"
+                  className="rounded-xl border border-white/[0.06] bg-white/[0.04] p-2 text-slate-300 transition hover:bg-white/[0.08]"
                   aria-label={showNumber ? "Sembunyikan nomor" : "Tampilkan nomor"}
                 >
                   <AnimatePresence mode="wait" initial={false}>
                     {showNumber ? (
                       <motion.span
                         key="eye-off"
-                        initial={{ opacity: 0, scale: 0.8 }}
+                        initial={{ opacity: 0, scale: 0.84 }}
                         animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.8 }}
+                        exit={{ opacity: 0, scale: 0.84 }}
+                        className="block"
                       >
-                        <EyeOff size={10} className="text-slate-500" />
+                        <EyeOff size={14} />
                       </motion.span>
                     ) : (
                       <motion.span
                         key="eye"
-                        initial={{ opacity: 0, scale: 0.8 }}
+                        initial={{ opacity: 0, scale: 0.84 }}
                         animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.8 }}
+                        exit={{ opacity: 0, scale: 0.84 }}
+                        className="block"
                       >
-                        <Eye size={10} className="text-slate-500" />
+                        <Eye size={14} />
                       </motion.span>
                     )}
                   </AnimatePresence>
                 </button>
 
                 <button
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onPointerUp={(event) => event.stopPropagation()}
                   onClick={handleCopy}
-                  className="p-1 rounded-md hover:bg-white/[0.08] transition-colors"
+                  className="rounded-xl border border-white/[0.06] bg-white/[0.04] p-2 text-slate-300 transition hover:bg-white/[0.08]"
                   aria-label="Salin nomor rekening"
                 >
                   <AnimatePresence mode="wait" initial={false}>
                     {copied ? (
                       <motion.span
                         key="check"
-                        initial={{ opacity: 0, scale: 0.8 }}
+                        initial={{ opacity: 0, scale: 0.84 }}
                         animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.8 }}
+                        exit={{ opacity: 0, scale: 0.84 }}
+                        className="block"
                       >
-                        <Check size={10} className="text-emerald-400" />
+                        <Check size={14} className="text-emerald-400" />
                       </motion.span>
                     ) : (
                       <motion.span
                         key="copy"
-                        initial={{ opacity: 0, scale: 0.8 }}
+                        initial={{ opacity: 0, scale: 0.84 }}
                         animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.8 }}
+                        exit={{ opacity: 0, scale: 0.84 }}
+                        className="block"
                       >
-                        <Copy size={10} className="text-slate-500" />
+                        <Copy size={14} />
                       </motion.span>
                     )}
                   </AnimatePresence>
@@ -256,9 +320,8 @@ function AccountCardItem({
               </div>
             </div>
           </div>
-        )}
+        ) : null}
       </div>
     </motion.div>
   )
 }
-

@@ -3,6 +3,8 @@ export const ROUTES = {
   login: "/login",
   register: "/register",
   forgotPassword: "/forgot-password",
+  resetPassword: "/reset-password",
+  authCallback: "/auth/callback",
   dashboard: "/dashboard",
   notifications: "/notifications",
   analytics: "/analytics",
@@ -26,3 +28,6 @@ export function topupAccountHref(accountId: string) {
   return `${ROUTES.topup}?account=${accountId}`
 }
 
+export function debtAlertHref(debtId: string) {
+  return `${ROUTES.debts}?debt=${debtId}`
+}

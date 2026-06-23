@@ -1,826 +1,836 @@
-//src/app/notifications/NotificationsClient.tsx
-
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { useRouter } from "next/navigation"
-import { motion, AnimatePresence, PanInfo } from "framer-motion"
-import { formatRupiah, cn } from "@/lib/utils"
-import BottomNav from "@/components/BottomNav"
-import { useRealtimeDebts } from "@/hooks/useRealtimeDebts"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { AnimatePresence, motion, type PanInfo } from "framer-motion"
 import {
-    Bell, BellOff, AlertTriangle, Clock, CalendarDays,
-    ChevronRight, ChevronLeft, CheckCircle2, Info, Sparkles, Trash2,
-    CheckCheck, Volume2, VolumeX, MoreVertical, Eye, RefreshCw
+  BellRing,
+  CheckCheck,
+  ChevronRight,
+  Eye,
+  EyeOff,
+  RotateCcw,
+  Trash2,
+  Undo2,
 } from "lucide-react"
-import Link from "next/link"
+import toast from "react-hot-toast"
 
-interface DebtItem {
-    id: string
-    type: 'hutang' | 'piutang'
-    amount: number
-    paid_amount: number
-    due_date: string | null
-    installment_count: number | null
-    installment_amount: number | null
-    start_date: string | null
-    interest_rate: number | null
-    contacts: { id: string; name: string }
+import { dismissAlert, getAlertDeepLink, markAllAlertsRead, setAlertReadState } from "@/lib/alerts"
+import { broadcastUnreadAlertCount } from "@/lib/alert-sync"
+import { cn } from "@/lib/utils"
+
+interface AlertItem {
+  id: string
+  type: string
+  title: string
+  message: string
+  source: string | null
+  created_at: string
+  read_at?: string | null
+  dismissed_at?: string | null
 }
 
 interface Props {
-    userId: string
-    overdueDebts: DebtItem[]
-    installmentDebts: DebtItem[]
-    todayStr: string
-    in7DaysStr: string
+  initialAlerts: AlertItem[]
 }
 
-type NotifItem = {
-    id: string
-    type: 'overdue' | 'upcoming' | 'installment'
-    title: string
-    subtitle: string
-    amount: number
-    date: string
-    debtId: string
-    urgent: boolean
+type NotificationFilterId = "aktif" | "unread" | "read" | "dismissed"
+type NotificationSeverityId = "semua" | "critical" | "warning" | "info"
+
+interface UndoDismissItem {
+  alertId: string
+  title: string
+  createdAt: number
+  expiresAt: number
 }
 
-// ✅ Haptic helper dengan pattern yang berbeda
-const triggerHaptic = (style: 'light' | 'medium' | 'heavy' | 'success' = 'light') => {
-    if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        const patterns = {
-            light: 8,
-            medium: 15,
-            heavy: [20, 40, 20],
-            success: [10, 50, 10, 50, 10]
+const UNDO_DISMISS_WINDOW_MS = 5000
+const MAX_UNDO_STACK = 3
+
+const isNotificationFilterId = (value: string | null): value is NotificationFilterId =>
+  value === "aktif" || value === "unread" || value === "read" || value === "dismissed"
+
+const parseNotificationFilter = (value: string | null): NotificationFilterId =>
+  isNotificationFilterId(value) ? value : "aktif"
+
+const isNotificationSeverityId = (value: string | null): value is NotificationSeverityId =>
+  value === "semua" || value === "critical" || value === "warning" || value === "info"
+
+const parseNotificationSeverity = (value: string | null): NotificationSeverityId =>
+  isNotificationSeverityId(value) ? value : "semua"
+
+const getAlertSeverity = (type: string): Exclude<NotificationSeverityId, "semua"> => {
+  if (type === "critical") return "critical"
+  if (type === "warning") return "warning"
+  return "info"
+}
+
+const triggerHaptic = (
+  style: "light" | "medium" | "success" | "read" | "unread" | "dismiss" | "restore" = "light"
+) => {
+  if (typeof navigator === "undefined" || !navigator.vibrate) return
+
+  const patterns = {
+    light: 8,
+    medium: 15,
+    success: [10, 50, 10],
+    read: [8, 30, 8],
+    unread: 16,
+    dismiss: [12, 40, 18],
+    restore: [10, 35, 10],
+  }
+
+  navigator.vibrate(patterns[style])
+}
+
+const severityBadgeClass = (type: string) =>
+  type === "critical"
+    ? "rounded-full border border-rose-500/20 bg-rose-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-rose-300"
+    : type === "warning"
+      ? "rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-300"
+      : "rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-cyan-300"
+
+const severityLabel = (type: string) =>
+  type === "critical" ? "Kritis" : type === "warning" ? "Peringatan" : "Info"
+
+const matchesSeverity = (alert: AlertItem, severity: NotificationSeverityId) =>
+  severity === "semua" ? true : getAlertSeverity(alert.type) === severity
+
+const shouldTriggerReadSwipe = (info: PanInfo) =>
+  info.offset.x >= 78 || (info.offset.x >= 42 && info.velocity.x >= 650)
+
+const shouldTriggerDismissSwipe = (info: PanInfo) =>
+  info.offset.x <= -78 || (info.offset.x <= -42 && info.velocity.x <= -650)
+
+export default function NotificationsClient({ initialAlerts }: Props) {
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+
+  const filterFromUrl = parseNotificationFilter(searchParams.get("filter"))
+  const severityFromUrl = parseNotificationSeverity(searchParams.get("severity"))
+
+  const [alerts, setAlerts] = useState(initialAlerts)
+  const [markingAll, setMarkingAll] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [undoingId, setUndoingId] = useState<string | null>(null)
+  const [selectedFilter, setSelectedFilter] = useState<NotificationFilterId>(filterFromUrl)
+  const [selectedSeverity, setSelectedSeverity] = useState<NotificationSeverityId>(severityFromUrl)
+  const [undoDismissStack, setUndoDismissStack] = useState<UndoDismissItem[]>([])
+  const [undoNow, setUndoNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    setSelectedFilter(filterFromUrl)
+  }, [filterFromUrl])
+
+  useEffect(() => {
+    setSelectedSeverity(severityFromUrl)
+  }, [severityFromUrl])
+
+  useEffect(() => {
+    if (undoDismissStack.length <= 0) return
+
+    const interval = setInterval(() => {
+      setUndoNow(Date.now())
+    }, 50)
+
+    return () => clearInterval(interval)
+  }, [undoDismissStack.length])
+
+  useEffect(() => {
+    if (undoDismissStack.length <= 0) return
+
+    setUndoDismissStack((prev) => {
+      const next = prev.filter((item) => item.expiresAt > undoNow)
+      return next.length === prev.length ? prev : next
+    })
+  }, [undoDismissStack.length, undoNow])
+
+  const unreadCount = useMemo(
+    () => alerts.filter((alert) => !alert.dismissed_at && !alert.read_at).length,
+    [alerts]
+  )
+
+  const activeCount = useMemo(() => alerts.filter((alert) => !alert.dismissed_at).length, [alerts])
+
+  const readCount = useMemo(
+    () => alerts.filter((alert) => !alert.dismissed_at && !!alert.read_at).length,
+    [alerts]
+  )
+
+  const dismissedCount = useMemo(() => alerts.filter((alert) => !!alert.dismissed_at).length, [alerts])
+
+  useEffect(() => {
+    broadcastUnreadAlertCount(unreadCount)
+  }, [unreadCount])
+
+  const alertsByStatusFilter = useMemo(() => {
+    switch (selectedFilter) {
+      case "unread":
+        return alerts.filter((alert) => !alert.dismissed_at && !alert.read_at)
+      case "read":
+        return alerts.filter((alert) => !alert.dismissed_at && !!alert.read_at)
+      case "dismissed":
+        return alerts.filter((alert) => !!alert.dismissed_at)
+      case "aktif":
+      default:
+        return alerts.filter((alert) => !alert.dismissed_at)
+    }
+  }, [alerts, selectedFilter])
+
+  const severityCounts = useMemo(() => {
+    return alertsByStatusFilter.reduce(
+      (acc, alert) => {
+        const severity = getAlertSeverity(alert.type)
+        acc.semua += 1
+        acc[severity] += 1
+        return acc
+      },
+      { semua: 0, critical: 0, warning: 0, info: 0 }
+    )
+  }, [alertsByStatusFilter])
+
+  const filteredAlerts = useMemo(
+    () => alertsByStatusFilter.filter((alert) => matchesSeverity(alert, selectedSeverity)),
+    [alertsByStatusFilter, selectedSeverity]
+  )
+
+  const filterTabs = useMemo(
+    () => [
+      {
+        id: "aktif" as const,
+        label: "Aktif",
+        count: activeCount,
+        activeClassName: "border-violet-400/30 bg-violet-500/20 text-violet-200",
+        idleClassName: "border-white/[0.08] bg-white/[0.03] text-[#94A3B8]",
+      },
+      {
+        id: "unread" as const,
+        label: "Belum dibaca",
+        count: unreadCount,
+        activeClassName: "border-cyan-400/30 bg-cyan-500/20 text-cyan-200",
+        idleClassName: "border-white/[0.08] bg-white/[0.03] text-[#94A3B8]",
+      },
+      {
+        id: "read" as const,
+        label: "Dibaca",
+        count: readCount,
+        activeClassName: "border-emerald-400/30 bg-emerald-500/20 text-emerald-200",
+        idleClassName: "border-white/[0.08] bg-white/[0.03] text-[#94A3B8]",
+      },
+      {
+        id: "dismissed" as const,
+        label: "Dismissed",
+        count: dismissedCount,
+        activeClassName: "border-rose-400/30 bg-rose-500/20 text-rose-200",
+        idleClassName: "border-white/[0.08] bg-white/[0.03] text-[#94A3B8]",
+      },
+    ],
+    [activeCount, dismissedCount, readCount, unreadCount]
+  )
+
+  const severityTabs = useMemo(
+    () => [
+      {
+        id: "semua" as const,
+        label: "Semua",
+        count: severityCounts.semua,
+        activeClassName: "border-white/[0.14] bg-white/[0.08] text-white",
+      },
+      {
+        id: "critical" as const,
+        label: "Kritis",
+        count: severityCounts.critical,
+        activeClassName: "border-rose-400/30 bg-rose-500/20 text-rose-200",
+      },
+      {
+        id: "warning" as const,
+        label: "Peringatan",
+        count: severityCounts.warning,
+        activeClassName: "border-amber-400/30 bg-amber-500/20 text-amber-200",
+      },
+      {
+        id: "info" as const,
+        label: "Info",
+        count: severityCounts.info,
+        activeClassName: "border-cyan-400/30 bg-cyan-500/20 text-cyan-200",
+      },
+    ],
+    [severityCounts]
+  )
+
+  const replaceUrlState = useCallback(
+    (nextFilter: NotificationFilterId, nextSeverity: NotificationSeverityId) => {
+      const params = new URLSearchParams(searchParams.toString())
+
+      if (nextFilter === "aktif") {
+        params.delete("filter")
+      } else {
+        params.set("filter", nextFilter)
+      }
+
+      if (nextSeverity === "semua") {
+        params.delete("severity")
+      } else {
+        params.set("severity", nextSeverity)
+      }
+
+      const nextQuery = params.toString()
+      const nextHref = nextQuery ? `${pathname}?${nextQuery}` : pathname
+      router.replace(nextHref, { scroll: false })
+    },
+    [pathname, router, searchParams]
+  )
+
+  const handleFilterChange = useCallback(
+    (nextFilter: NotificationFilterId) => {
+      setSelectedFilter(nextFilter)
+      replaceUrlState(nextFilter, selectedSeverity)
+    },
+    [replaceUrlState, selectedSeverity]
+  )
+
+  const handleSeverityChange = useCallback(
+    (nextSeverity: NotificationSeverityId) => {
+      setSelectedSeverity(nextSeverity)
+      replaceUrlState(selectedFilter, nextSeverity)
+    },
+    [replaceUrlState, selectedFilter]
+  )
+
+  const queueUndoDismiss = useCallback((alert: AlertItem) => {
+    const createdAt = Date.now()
+    const nextItem: UndoDismissItem = {
+      alertId: alert.id,
+      title: alert.title,
+      createdAt,
+      expiresAt: createdAt + UNDO_DISMISS_WINDOW_MS,
+    }
+
+    setUndoDismissStack((prev) => [nextItem, ...prev.filter((item) => item.alertId !== alert.id)].slice(0, MAX_UNDO_STACK))
+  }, [])
+
+  const removeUndoItem = useCallback((alertId: string) => {
+    setUndoDismissStack((prev) => prev.filter((item) => item.alertId !== alertId))
+  }, [])
+
+  const restoreDismissedAlert = useCallback(
+    async (alert: AlertItem, mode: "undo" | "manual" = "manual") => {
+      const restoreId = alert.id
+      setBusyId(restoreId)
+
+      if (mode === "undo") {
+        setUndoingId(restoreId)
+      }
+
+      try {
+        await dismissAlert({ alertId: restoreId, dismiss: false })
+        setAlerts((prev) =>
+          prev.map((item) =>
+            item.id === restoreId
+              ? {
+                  ...item,
+                  dismissed_at: null,
+                }
+              : item
+          )
+        )
+        removeUndoItem(restoreId)
+        triggerHaptic("restore")
+        toast.success(mode === "undo" ? "Dismiss dibatalkan" : "Alert dipulihkan")
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Gagal memulihkan alert"
+        toast.error(message)
+      } finally {
+        setBusyId((current) => (current === restoreId ? null : current))
+        if (mode === "undo") {
+          setUndoingId((current) => (current === restoreId ? null : current))
         }
-        navigator.vibrate(patterns[style])
-    }
-}
+      }
+    },
+    [removeUndoItem]
+  )
 
-// ✅ PWA Badge API helper
-const updateAppBadge = (count: number) => {
-    if (typeof navigator !== 'undefined' && 'setAppBadge' in navigator) {
+  const handleMarkRead = useCallback(async (alert: AlertItem, read: boolean) => {
+    setBusyId(alert.id)
+
+    try {
+      await setAlertReadState({ alertId: alert.id, read })
+      setAlerts((prev) =>
+        prev.map((item) =>
+          item.id === alert.id
+            ? {
+                ...item,
+                read_at: read ? new Date().toISOString() : null,
+              }
+            : item
+        )
+      )
+      triggerHaptic(read ? "read" : "unread")
+      toast.success(read ? "Alert ditandai dibaca" : "Status baca dibuka lagi")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal mengubah status baca"
+      toast.error(message)
+    } finally {
+      setBusyId(null)
+    }
+  }, [])
+
+  const handleDismiss = useCallback(
+    async (alert: AlertItem) => {
+      setBusyId(alert.id)
+
+      try {
+        await dismissAlert({ alertId: alert.id, dismiss: true })
+        setAlerts((prev) =>
+          prev.map((item) =>
+            item.id === alert.id
+              ? {
+                  ...item,
+                  dismissed_at: new Date().toISOString(),
+                }
+              : item
+          )
+        )
+        queueUndoDismiss(alert)
+        triggerHaptic("dismiss")
+        toast.success("Alert didismiss")
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Gagal dismiss alert"
+        toast.error(message)
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [queueUndoDismiss]
+  )
+
+  const handleMarkAll = useCallback(async () => {
+    if (unreadCount <= 0 || markingAll) return
+
+    setMarkingAll(true)
+    try {
+      await markAllAlertsRead()
+      setAlerts((prev) =>
+        prev.map((item) =>
+          item.dismissed_at
+            ? item
+            : {
+                ...item,
+                read_at: item.read_at ?? new Date().toISOString(),
+              }
+        )
+      )
+      triggerHaptic("success")
+      toast.success("Semua alert ditandai dibaca")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal menandai semua alert"
+      toast.error(message)
+    } finally {
+      setMarkingAll(false)
+    }
+  }, [markingAll, unreadCount])
+
+  const handleOpenAlert = useCallback(
+    async (alert: AlertItem) => {
+      const href = getAlertDeepLink(alert.source)
+      if (!href) return
+
+      triggerHaptic("light")
+
+      if (!alert.read_at && !alert.dismissed_at) {
         try {
-            // @ts-ignore
-            navigator.setAppBadge(count)
-        } catch (e) { }
-    }
-}
-
-function buildNotifications(
-    overdueDebts: DebtItem[],
-    installmentDebts: DebtItem[],
-    todayStr: string
-): NotifItem[] {
-    const items: NotifItem[] = []
-
-    overdueDebts.forEach(d => {
-        const isOverdue = (d.due_date ?? '') < todayStr
-        const remaining = d.amount - d.paid_amount
-        items.push({
-            id: `debt-${d.id}`,
-            type: isOverdue ? 'overdue' : 'upcoming',
-            title: isOverdue
-                ? `${d.type === 'piutang' ? 'Piutang' : 'Hutang'} jatuh tempo!`
-                : `${d.type === 'piutang' ? 'Piutang' : 'Hutang'} akan jatuh tempo`,
-            subtitle: `${d.contacts.name} · ${d.type === 'piutang' ? 'Tagih' : 'Bayar'} ${formatRupiah(remaining)}`,
-            amount: remaining,
-            date: d.due_date ?? '',
-            debtId: d.id,
-            urgent: isOverdue,
-        })
-    })
-
-    installmentDebts.forEach(d => {
-        if (!d.start_date || !d.installment_count || !d.installment_amount) return
-        const paidCount = Math.floor(d.paid_amount / d.installment_amount)
-        const nextPeriod = paidCount + 1
-        if (nextPeriod > d.installment_count) return
-
-        const nextDate = new Date(d.start_date)
-        nextDate.setMonth(nextDate.getMonth() + nextPeriod)
-        const nextDateStr = nextDate.toISOString().split('T')[0]
-        const isUrgent = nextDateStr <= todayStr
-
-        items.push({
-            id: `installment-${d.id}-${nextPeriod}`,
-            type: 'installment',
-            title: `Cicilan ${nextPeriod}/${d.installment_count}`,
-            subtitle: `${d.contacts.name} · ${d.type === 'piutang' ? 'Terima' : 'Bayar'} ${formatRupiah(d.installment_amount)}`,
-            amount: d.installment_amount,
-            date: nextDateStr,
-            debtId: d.id,
-            urgent: isUrgent,
-        })
-    })
-
-    return items.sort((a, b) => {
-        if (a.urgent && !b.urgent) return -1
-        if (!a.urgent && b.urgent) return 1
-        return a.date.localeCompare(b.date)
-    })
-}
-
-// ✅ Grouping helper untuk visual grouping per tanggal
-function getDateGroup(dateStr: string, todayStr: string): {
-    group: 'overdue' | 'today' | 'tomorrow' | 'this-week' | 'later' | 'no-date'
-    label: string
-    color: string
-} {
-    if (!dateStr) return { group: 'no-date', label: 'Tanpa tanggal', color: 'text-slate-500' }
-
-    if (dateStr < todayStr) {
-        const days = Math.round((new Date(todayStr).getTime() - new Date(dateStr).getTime()) / 86400000)
-        return {
-            group: 'overdue',
-            label: days === 1 ? 'Kemarin' : `${days} hari lalu`,
-            color: 'text-rose-400'
-        }
-    }
-    if (dateStr === todayStr) return { group: 'today', label: 'Hari ini', color: 'text-amber-400' }
-
-    const days = Math.round((new Date(dateStr).getTime() - new Date(todayStr).getTime()) / 86400000)
-    if (days === 1) return { group: 'tomorrow', label: 'Besok', color: 'text-blue-400' }
-    if (days <= 7) return { group: 'this-week', label: `${days} hari lagi`, color: 'text-violet-400' }
-
-    return {
-        group: 'later',
-        label: new Date(dateStr).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }),
-        color: 'text-slate-400'
-    }
-}
-
-export default function NotificationsClient({
-    userId, overdueDebts, installmentDebts, todayStr, in7DaysStr
-}: Props) {
-    const router = useRouter()
-    const [pushEnabled, setPushEnabled] = useState(false)
-    const [pushLoading, setPushLoading] = useState(false)
-
-    const [permissionState, setPermissionState] = useState<NotificationPermission>('default')
-    const [soundEnabled, setSoundEnabled] = useState(true)
-    const [refreshing, setRefreshing] = useState(false)
-    const [contextMenu, setContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
-
-    // ✅ Persistent dismissed IDs dengan localStorage
-    const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => {
-        if (typeof window === 'undefined') return new Set()
-        try {
-            const saved = localStorage.getItem(`dismissed-notifs-${userId}`)
-            return saved ? new Set(JSON.parse(saved)) : new Set()
+          await setAlertReadState({ alertId: alert.id, read: true })
+          setAlerts((prev) =>
+            prev.map((item) =>
+              item.id === alert.id
+                ? {
+                    ...item,
+                    read_at: new Date().toISOString(),
+                  }
+                : item
+            )
+          )
         } catch {
-            return new Set()
+          // ignore read failure, still allow deep link
         }
-    })
+      }
 
-    const allNotifications = buildNotifications(overdueDebts, installmentDebts, todayStr)
-    const notifications = allNotifications.filter(n => !dismissedIds.has(n.id))
-    const urgentCount = notifications.filter(n => n.urgent).length
+      router.push(href)
+    },
+    [router]
+  )
 
-    // ✅ Sync PWA badge
-    useEffect(() => {
-        updateAppBadge(urgentCount)
-    }, [urgentCount])
-
-    // ✅ Save dismissed IDs ke localStorage
-    useEffect(() => {
-        if (typeof window !== 'undefined') {
-            localStorage.setItem(`dismissed-notifs-${userId}`, JSON.stringify([...dismissedIds]))
-        }
-    }, [dismissedIds, userId])
-
-    useEffect(() => {
-        if ('Notification' in window) {
-            setPermissionState(Notification.permission)
-            setPushEnabled(Notification.permission === 'granted')
-        }
-    }, [])
-
-    const handleTogglePush = async () => {
-        if (!('Notification' in window)) {
-            alert('Browser kamu tidak mendukung notifikasi')
-            return
-        }
-        triggerHaptic('medium')
-        if (pushEnabled) {
-            setPushEnabled(false)
-            return
-        }
-        setPushLoading(true)
-        try {
-            const permission = await Notification.requestPermission()
-            setPermissionState(permission)
-            if (permission === 'granted') {
-                setPushEnabled(true)
-                triggerHaptic('success')
-                new Notification('Notifikasi Aktif! 🔔', {
-                    body: 'Kamu akan mendapat pengingat hutang & cicilan',
-                    icon: '/icons/icon-192.png',
-                })
-            }
-        } finally {
-            setPushLoading(false)
-        }
+  const emptyStateCopy = useMemo(() => {
+    if (selectedSeverity !== "semua") {
+      return {
+        title: `Tidak ada alert ${selectedSeverity === "critical" ? "kritis" : selectedSeverity === "warning" ? "peringatan" : "info"}`,
+        description: "Coba ganti level severity atau tab notifikasi untuk melihat alert lainnya.",
+      }
     }
 
-    const sendReminder = useCallback((item: NotifItem) => {
-        triggerHaptic('medium')
-        if (!pushEnabled) {
-            handleTogglePush()
-            return
+    switch (selectedFilter) {
+      case "unread":
+        return {
+          title: "Tidak ada alert belum dibaca",
+          description: "Semua alert aktif sudah kamu lihat atau tandai dibaca.",
         }
-        new Notification(item.title, {
-            body: item.subtitle,
-            icon: '/icons/icon-192.png',
-        })
-    }, [pushEnabled])
+      case "read":
+        return {
+          title: "Belum ada alert dibaca",
+          description: "Alert yang sudah dibaca akan tampil di tab ini.",
+        }
+      case "dismissed":
+        return {
+          title: "Belum ada alert dismissed",
+          description: "Alert yang kamu dismiss akan tersimpan di sini dan bisa dipulihkan lagi.",
+        }
+      case "aktif":
+      default:
+        return {
+          title: "Belum ada alert aktif",
+          description: "Saat ada risk analytics atau debt urgent, notifikasi akan tampil di sini.",
+        }
+    }
+  }, [selectedFilter, selectedSeverity])
 
-    const handleDismiss = useCallback((id: string) => {
-        triggerHaptic('light')
-        setDismissedIds(prev => new Set(prev).add(id))
-        setContextMenu(null)
-    }, [])
-
-    const handleClearAll = useCallback(() => {
-        triggerHaptic('medium')
-        setDismissedIds(new Set(notifications.map(n => n.id)))
-    }, [notifications])
-
-    const handleRefresh = useCallback(async () => {
-        setRefreshing(true)
-        triggerHaptic('medium')
-        await router.refresh()
-        setTimeout(() => setRefreshing(false), 500)
-    }, [router])
-    // ✅ PANGGIL HOOK DI TOP-LEVEL
-        useRealtimeDebts(userId, () => {
-        // Auto-refresh saat ada perubahan di tabel debts
-        handleRefresh()
-    })
-
-    const handleLongPress = useCallback((id: string, e: React.MouseEvent | React.TouchEvent) => {
-        e.preventDefault()
-        triggerHaptic('medium')
-        const rect = (e.target as HTMLElement).getBoundingClientRect()
-        setContextMenu({
-            id,
-            x: rect.left + rect.width / 2,
-            y: rect.top + rect.height / 2,
-        })
-    }, [])
-
-    return (
-        <main
-            className="min-h-screen pb-32 relative"
-            style={{ background: "linear-gradient(160deg, #0d1f3c 0%, #080e1a 50%, #0B1120 100%)" }}
-        >
-            {/* Ambient Glow */}
-            <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
-                <div className="absolute -top-40 -right-40 w-96 h-96 rounded-full bg-amber-500/10 blur-[120px]" />
-                <div className="absolute bottom-20 -left-40 w-96 h-96 rounded-full bg-rose-500/10 blur-[120px]" />
+  return (
+    <>
+      <section className="space-y-4">
+        <div className="rounded-[24px] border border-white/[0.07] bg-[#0B1120]/80 p-4 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-[#64748B]">Status Alert</p>
+              <p className="mt-1 text-sm font-semibold text-white">
+                {unreadCount > 0 ? `${unreadCount} alert belum dibaca` : "Semua alert aktif sudah dibaca"}
+              </p>
             </div>
-
-            {/* Pull to refresh indicator */}
-            <AnimatePresence>
-                {refreshing && (
-                    <motion.div
-                        initial={{ opacity: 0, y: -20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
-                        className="fixed top-0 left-0 right-0 z-50 flex justify-center pt-16 pointer-events-none"
-                    >
-                        <div className="px-4 py-2 rounded-full bg-[#151E32] border border-white/[0.08] backdrop-blur-xl flex items-center gap-2 shadow-xl">
-                            <RefreshCw size={14} className="text-amber-400 animate-spin" />
-                            <span className="text-xs font-bold text-[#F1F5F9]">Memuat ulang...</span>
-                        </div>
-                    </motion.div>
-                )}
-            </AnimatePresence>
-
-            {/* Sticky Header */}
-            <header
-                className="sticky top-0 z-30 px-5 pt-14 pb-4 backdrop-blur-2xl bg-[#0B1120]/80 border-b border-white/[0.04]"
-                style={{ paddingTop: 'max(3.5rem, env(safe-area-inset-top))' }}
+            <button
+              type="button"
+              onClick={() => void handleMarkAll()}
+              disabled={unreadCount <= 0 || markingAll}
+              className="inline-flex items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3.5 py-2 text-[11px] font-bold text-cyan-300 transition disabled:cursor-not-allowed disabled:opacity-40"
             >
-                {/* Back Button + Title */}
-                <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                        <Link
-                            href="/dashboard"
-                            onClick={() => triggerHaptic('light')}
-                            className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center hover:bg-white/[0.08] active:scale-95 transition-all"
-                        >
-                            <ChevronLeft size={18} className="text-[#F1F5F9]" />
-                        </Link>
+              <CheckCheck size={13} className={markingAll ? "animate-pulse" : ""} />
+              Tandai semua dibaca
+            </button>
+          </div>
 
-                        <div>
-                            <h1 className="text-[#F1F5F9] font-bold text-[20px] tracking-tight leading-tight">Notifikasi</h1>
-                            <p className="text-[#64748B] text-[11px] mt-0.5 font-medium">
-                                {urgentCount > 0 ? (
-                                    <span className="text-rose-400 font-bold">{urgentCount} perlu perhatian</span>
-                                ) : (
-                                    <span className="text-emerald-400 font-bold">✓ Semua aman</span>
-                                )}
-                            </p>
-                        </div>
-                    </div>
-
-                    {/* Right Actions */}
-                    <div className="flex items-center gap-2">
-                        {/* Sound Toggle */}
-                        <motion.button
-                            whileTap={{ scale: 0.9 }}
-                            onClick={() => {
-                                triggerHaptic('light')
-                                setSoundEnabled(!soundEnabled)
-                            }}
-                            className="w-10 h-10 rounded-xl bg-white/[0.04] border border-white/[0.06] flex items-center justify-center hover:bg-white/[0.08] active:scale-95 transition-all"
-                        >
-                            {soundEnabled ? (
-                                <Volume2 size={16} className="text-[#94A3B8]" />
-                            ) : (
-                                <VolumeX size={16} className="text-[#475569]" />
-                            )}
-                        </motion.button>
-
-                        {/* Push Toggle */}
-                        <motion.button
-                            whileTap={{ scale: 0.95 }}
-                            onClick={handleTogglePush}
-                            disabled={pushLoading}
-                            className={cn(
-                                "flex items-center gap-2 px-3 py-2 rounded-xl border text-[11px] font-bold transition-all active:scale-95",
-                                pushEnabled
-                                    ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
-                                    : "bg-[#151E32] border-white/[0.06] text-[#64748B]"
-                            )}
-                        >
-                            {pushLoading ? (
-                                <motion.div
-                                    animate={{ rotate: 360 }}
-                                    transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
-                                >
-                                    <Bell size={13} />
-                                </motion.div>
-                            ) : pushEnabled ? (
-                                <Bell size={13} />
-                            ) : (
-                                <BellOff size={13} />
-                            )}
-                            {pushEnabled ? 'Aktif' : 'Aktifkan'}
-                        </motion.button>
-                    </div>
-                </div>
-
-                {/* Permission denied warning */}
-                <AnimatePresence>
-                    {permissionState === 'denied' && (
-                        <motion.div
-                            initial={{ opacity: 0, height: 0 }}
-                            animate={{ opacity: 1, height: 'auto' }}
-                            exit={{ opacity: 0, height: 0 }}
-                            className="mb-3 flex items-start gap-2 p-3 rounded-xl bg-rose-500/[0.08] border border-rose-500/15 overflow-hidden"
-                        >
-                            <Info size={13} className="text-rose-400 shrink-0 mt-0.5" />
-                            <p className="text-rose-400/80 text-[10px] leading-relaxed">
-                                Notifikasi diblokir. Buka pengaturan browser untuk mengizinkan notifikasi.
-                            </p>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-
-                {/* Clear All Button */}
-                {notifications.length > 0 && (
-                    <motion.button
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        whileTap={{ scale: 0.95 }}
-                        onClick={handleClearAll}
-                        className="w-full py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[#94A3B8] text-[11px] font-bold flex items-center justify-center gap-1.5 hover:bg-white/[0.06] active:scale-[0.98] transition-all"
-                    >
-                        <CheckCheck size={13} />
-                        Tandai semua dibaca
-                    </motion.button>
-                )}
-            </header>
-
-            {/* ✅ Pull-to-refresh area */}
-            <motion.div
-                drag="y"
-                dragConstraints={{ top: 0, bottom: 0 }}
-                dragElastic={0.3}
-                onDragEnd={(_, info) => {
-                    if (info.offset.y > 150 && !refreshing) {
-                        handleRefresh()
-                    }
-                }}
-                className="relative z-10 px-5 mt-5"
-            >
-                {/* Empty state */}
-                <AnimatePresence mode="wait">
-                    {notifications.length === 0 && (
-                        <motion.div
-                            key="empty"
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -20 }}
-                            className="flex flex-col items-center justify-center py-20 text-center"
-                        >
-                            <div className="relative mb-6">
-                                <motion.div
-                                    animate={{
-                                        scale: [1, 1.05, 1],
-                                        rotate: [0, 5, -5, 0]
-                                    }}
-                                    transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-                                    className="w-24 h-24 rounded-3xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/30 flex items-center justify-center shadow-lg shadow-emerald-500/20"
-                                >
-                                    <CheckCircle2 size={44} className="text-emerald-400" strokeWidth={2} />
-                                </motion.div>
-
-                                {[...Array(3)].map((_, i) => (
-                                    <motion.div
-                                        key={i}
-                                        animate={{
-                                            scale: [0, 1, 0],
-                                            opacity: [0, 1, 0],
-                                            y: [0, -20, -40]
-                                        }}
-                                        transition={{
-                                            duration: 2,
-                                            repeat: Infinity,
-                                            delay: i * 0.3,
-                                            ease: "easeOut"
-                                        }}
-                                        className="absolute"
-                                        style={{
-                                            top: `${20 + i * 10}%`,
-                                            left: `${20 + i * 30}%`
-                                        }}
-                                    >
-                                        <Sparkles size={14} className="text-amber-400" />
-                                    </motion.div>
-                                ))}
-                            </div>
-
-                            <h2 className="text-[#F1F5F9] font-bold text-xl tracking-tight mb-2">
-                                Semua Beres! 🎉
-                            </h2>
-                            <p className="text-[#64748B] text-sm leading-relaxed max-w-xs mb-6">
-                                {allNotifications.length > 0
-                                    ? "Semua notifikasi sudah ditandai dibaca"
-                                    : "Tidak ada hutang jatuh tempo atau cicilan yang perlu diperhatikan"
-                                }
-                            </p>
-
-                            <Link href="/debts">
-                                <motion.button
-                                    whileTap={{ scale: 0.95 }}
-                                    className="px-5 py-3 rounded-2xl bg-gradient-to-r from-violet-500 to-indigo-600 text-white text-sm font-bold shadow-lg shadow-violet-900/30 flex items-center gap-2"
-                                >
-                                    Lihat Catatan Hutang
-                                    <ChevronRight size={16} />
-                                </motion.button>
-                            </Link>
-                        </motion.div>
-                    )}
-                </AnimatePresence>
-
-                {/* ✅ Visual Grouping: Urgent Section */}
-                {notifications.filter(n => n.urgent).length > 0 && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        className="mb-6"
-                    >
-                        <div className="flex items-center gap-2 mb-3 px-1">
-                            <div className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
-                            <p className="text-rose-400 text-[10px] font-bold uppercase tracking-[0.15em]">
-                                Perlu Tindakan
-                            </p>
-                            <div className="flex-1 h-px bg-gradient-to-r from-rose-500/30 to-transparent" />
-                        </div>
-                        <div className="space-y-2">
-                            {notifications.filter(n => n.urgent).map((item, i) => (
-                                <NotifCard
-                                    key={item.id}
-                                    item={item}
-                                    index={i}
-                                    dateGroup={getDateGroup(item.date, todayStr)}
-                                    onRemind={() => sendReminder(item)}
-                                    onDismiss={() => handleDismiss(item.id)}
-                                    onLongPress={handleLongPress}
-                                    soundEnabled={soundEnabled}
-                                />
-                            ))}
-                        </div>
-                    </motion.div>
-                )}
-
-                {/* ✅ Visual Grouping: Grouped by Date */}
-                {notifications.filter(n => !n.urgent).length > 0 && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                        <div className="flex items-center gap-2 mb-3 px-1">
-                            <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                            <p className="text-[#94A3B8] text-[10px] font-bold uppercase tracking-[0.15em]">
-                                Akan Datang
-                            </p>
-                            <div className="flex-1 h-px bg-gradient-to-r from-white/[0.08] to-transparent" />
-                        </div>
-
-                        {/* Group by date */}
-                        {(['tomorrow', 'this-week', 'later'] as const).map(groupKey => {
-                            const groupItems = notifications.filter(n =>
-                                !n.urgent && getDateGroup(n.date, todayStr).group === groupKey
-                            )
-                            if (groupItems.length === 0) return null
-                            const sampleDateGroup = getDateGroup(groupItems[0].date, todayStr)
-
-                            return (
-                                <div key={groupKey} className="mb-4">
-                                    <div className="flex items-center gap-2 mb-2 ml-1">
-                                        <CalendarDays size={10} className={sampleDateGroup.color} />
-                                        <p className={cn("text-[10px] font-bold", sampleDateGroup.color)}>
-                                            {sampleDateGroup.label}
-                                        </p>
-                                    </div>
-                                    <div className="space-y-2">
-                                        {groupItems.map((item, i) => (
-                                            <NotifCard
-                                                key={item.id}
-                                                item={item}
-                                                index={i}
-                                                dateGroup={getDateGroup(item.date, todayStr)}
-                                                onRemind={() => sendReminder(item)}
-                                                onDismiss={() => handleDismiss(item.id)}
-                                                onLongPress={handleLongPress}
-                                                soundEnabled={soundEnabled}
-                                            />
-                                        ))}
-                                    </div>
-                                </div>
-                            )
-                        })}
-                    </motion.div>
-                )}
-            </motion.div>
-
-            {/* ✅ iOS Context Menu */}
-            <AnimatePresence>
-                {contextMenu && (
-                    <>
-                        <motion.div
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            onClick={() => setContextMenu(null)}
-                            className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm"
-                        />
-                        <motion.div
-                            initial={{ opacity: 0, scale: 0.8, y: 10 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.8, y: 10 }}
-                            transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                            className="fixed z-50 w-56 rounded-2xl bg-[#151E32]/95 backdrop-blur-2xl border border-white/[0.08] shadow-2xl overflow-hidden"
-                            style={{
-                                left: Math.min(contextMenu.x - 112, window.innerWidth - 240),
-                                top: Math.max(contextMenu.y - 100, 80),
-                            }}
-                        >
-                            <div className="p-1.5">
-                                <button
-                                    onClick={() => {
-                                        const item = notifications.find(n => n.id === contextMenu.id)
-                                        if (item) sendReminder(item)
-                                        setContextMenu(null)
-                                    }}
-                                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-[#F1F5F9] text-sm font-medium hover:bg-white/[0.06] active:scale-95 transition-all"
-                                >
-                                    <Bell size={16} className="text-amber-400" />
-                                    Ingatkan
-                                </button>
-                                <Link
-                                    href={`/debts?highlight=${contextMenu.id.replace('debt-', '').replace(/installment-.*-/, '')}`}
-                                    onClick={() => setContextMenu(null)}
-                                    className="block w-full text-left"
-                                >
-                                    <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-[#F1F5F9] text-sm font-medium hover:bg-white/[0.06] active:scale-95 transition-all">
-                                        <Eye size={16} className="text-blue-400" />
-                                        Lihat Detail
-                                    </div>
-                                </Link>
-                                <button
-                                    onClick={() => {
-                                        handleDismiss(contextMenu.id)
-                                        setContextMenu(null)
-                                    }}
-                                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-rose-400 text-sm font-medium hover:bg-rose-500/10 active:scale-95 transition-all"
-                                >
-                                    <Trash2 size={16} />
-                                    Hapus
-                                </button>
-                            </div>
-                        </motion.div>
-                    </>
-                )}
-            </AnimatePresence>
-
-            <BottomNav />
-        </main>
-    )
-}
-
-// ✅ NotifCard dengan swipe, long-press, dan link spesifik
-function NotifCard({ item, index, dateGroup, onRemind, onDismiss, onLongPress, soundEnabled }: {
-    item: NotifItem
-    index: number
-    dateGroup: { group: string; label: string; color: string }
-    onRemind: () => void
-    onDismiss: () => void
-    onLongPress: (id: string, e: React.MouseEvent | React.TouchEvent) => void
-    soundEnabled: boolean
-}) {
-    const [offsetX, setOffsetX] = useState(0)
-    const [longPressTimer, setLongPressTimer] = useState<NodeJS.Timeout | null>(null)
-    const isOverdue = item.type === 'overdue'
-    const isInstallment = item.type === 'installment'
-
-    const handleDragEnd = (_: any, info: PanInfo) => {
-        if (info.offset.x < -100) {
-            triggerHaptic('medium')
-            onDismiss()
-        } else {
-            setOffsetX(0)
-        }
-    }
-
-    const handleTouchStart = (e: React.TouchEvent) => {
-        const timer = setTimeout(() => {
-            onLongPress(item.id, e)
-        }, 500)
-        setLongPressTimer(timer)
-    }
-
-    const handleTouchEnd = () => {
-        if (longPressTimer) {
-            clearTimeout(longPressTimer)
-            setLongPressTimer(null)
-        }
-    }
-
-    const handleMouseDown = (e: React.MouseEvent) => {
-        const timer = setTimeout(() => {
-            onLongPress(item.id, e)
-        }, 500)
-        setLongPressTimer(timer)
-    }
-
-    const handleMouseUp = () => {
-        if (longPressTimer) {
-            clearTimeout(longPressTimer)
-            setLongPressTimer(null)
-        }
-    }
-
-    const cardStyles = {
-        overdue: {
-            bg: "bg-rose-500/[0.06]",
-            border: "border-rose-500/20",
-            iconBg: "bg-rose-500/20",
-            icon: <AlertTriangle size={18} className="text-rose-400" strokeWidth={2.5} />,
-            glow: "bg-rose-400"
-        },
-        installment: {
-            bg: "bg-violet-500/[0.05]",
-            border: "border-violet-500/15",
-            iconBg: "bg-violet-500/20",
-            icon: <CalendarDays size={18} className="text-violet-400" strokeWidth={2.5} />,
-            glow: "bg-violet-400"
-        },
-        upcoming: {
-            bg: "bg-amber-500/[0.05]",
-            border: "border-amber-500/15",
-            iconBg: "bg-amber-500/20",
-            icon: <Clock size={18} className="text-amber-400" strokeWidth={2.5} />,
-            glow: "bg-amber-400"
-        }
-    }
-
-    const style = isOverdue ? cardStyles.overdue : isInstallment ? cardStyles.installment : cardStyles.upcoming
-
-    return (
-        <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, x: -300, height: 0 }}
-            transition={{ delay: index * 0.04, type: "spring", stiffness: 300, damping: 28 }}
-            className="relative overflow-hidden rounded-2xl group"
-        >
-            {/* Swipe to delete background */}
-            <div className="absolute inset-0 bg-rose-500/20 flex items-center justify-end px-5 rounded-2xl">
-                <div className="flex items-center gap-2 text-rose-400">
-                    <Trash2 size={16} />
-                    <span className="text-xs font-bold">Hapus</span>
-                </div>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            <div className="rounded-2xl border border-cyan-500/15 bg-cyan-500/10 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Belum dibaca</p>
+              <p className="mt-1 text-lg font-black tabular-nums text-white">{unreadCount}</p>
             </div>
+            <div className="rounded-2xl border border-white/[0.07] bg-white/[0.03] p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-[#94A3B8]">Aktif</p>
+              <p className="mt-1 text-lg font-black tabular-nums text-white">{activeCount}</p>
+            </div>
+            <div className="rounded-2xl border border-rose-500/15 bg-rose-500/10 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-rose-300">Dismissed</p>
+              <p className="mt-1 text-lg font-black tabular-nums text-white">{dismissedCount}</p>
+            </div>
+          </div>
+        </div>
 
-            <motion.div
-                drag="x"
-                dragConstraints={{ left: -150, right: 0 }}
-                dragElastic={0.1}
-                onDrag={(_, info) => setOffsetX(info.offset.x)}
-                onDragEnd={handleDragEnd}
-                animate={{ x: offsetX }}
-                transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                onTouchStart={handleTouchStart}
-                onTouchEnd={handleTouchEnd}
-                onMouseDown={handleMouseDown}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
-            >
-                <Link
-                    href={`/debts?highlight=${item.debtId}`}
-                    className="block"
-                    onClick={() => triggerHaptic('light')}
+        <div className="rounded-[24px] border border-white/[0.07] bg-[#0B1120]/80 p-3 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 scrollbar-hide">
+            {filterTabs.map((tab) => {
+              const active = selectedFilter === tab.id
+
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic("light")
+                    handleFilterChange(tab.id)
+                  }}
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-2 rounded-full border px-3.5 py-2 text-[11px] font-bold transition active:scale-95",
+                    active ? tab.activeClassName : tab.idleClassName
+                  )}
+                  aria-pressed={active}
                 >
-                    <div className={cn(
-                        "relative rounded-2xl p-4 border transition-all bg-[#151E32]",
-                        style.border,
-                        "active:scale-[0.98] active:bg-[#1E293B]"
-                    )}>
-                        {item.urgent && (
-                            <div className={cn(
-                                "absolute top-0 right-0 w-32 h-32 rounded-full blur-3xl opacity-[0.08] pointer-events-none",
-                                style.glow
-                            )} />
-                        )}
+                  <span>{tab.label}</span>
+                  <span
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[10px] font-black tabular-nums",
+                      active ? "bg-white/10 text-white" : "bg-white/[0.06] text-[#CBD5E1]"
+                    )}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
 
-                        <div className="flex items-start gap-3 relative z-10">
-                            <motion.div
-                                className={cn("w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 border border-white/[0.05]", style.iconBg)}
-                                whileHover={{ scale: 1.05, rotate: 5 }}
-                            >
-                                {style.icon}
-                            </motion.div>
+          <div className="mt-3 -mx-1 flex gap-2 overflow-x-auto px-1 pb-1 scrollbar-hide">
+            {severityTabs.map((tab) => {
+              const active = selectedSeverity === tab.id
 
-                            <div className="flex-1 min-w-0 pt-0.5">
-                                <div className="flex items-start justify-between gap-2 mb-1">
-                                    <p className="text-[#F1F5F9] font-bold text-[14px] tracking-tight leading-tight">
-                                        {item.title}
-                                    </p>
-                                    {item.urgent && (
-                                        <motion.div
-                                            animate={{ scale: [1, 1.2, 1] }}
-                                            transition={{ duration: 1.5, repeat: Infinity }}
-                                            className="w-2 h-2 rounded-full bg-rose-400 shrink-0 mt-1.5"
-                                        />
-                                    )}
-                                </div>
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    triggerHaptic("light")
+                    handleSeverityChange(tab.id)
+                  }}
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition active:scale-95",
+                    active ? tab.activeClassName : "border-white/[0.08] bg-white/[0.03] text-[#94A3B8]"
+                  )}
+                  aria-pressed={active}
+                >
+                  <span>{tab.label}</span>
+                  <span
+                    className={cn(
+                      "rounded-full px-1.5 py-0.5 text-[9px] font-black tabular-nums",
+                      active ? "bg-white/10 text-white" : "bg-white/[0.06] text-[#CBD5E1]"
+                    )}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
 
-                                <p className="text-[#94A3B8] text-[11px] truncate mb-2">
-                                    {item.subtitle}
-                                </p>
+        <div className="rounded-[24px] border border-white/[0.07] bg-[#0B1120]/80 px-4 py-3 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.55)] backdrop-blur-xl">
+          <p className="text-[11px] font-semibold text-[#94A3B8]">
+            {selectedFilter === "dismissed"
+              ? "Alert yang sudah didismiss tetap aman di sini. Kamu bisa pulihkan manual atau undo beberapa alert sekaligus lewat stack di bawah."
+              : "Geser cepat sedikit pun sekarang tetap terbaca: swipe kanan untuk baca / belum dibaca, swipe kiri untuk dismiss. Tap alert untuk buka deep link jika tersedia."}
+          </p>
+        </div>
 
-                                <div className="flex items-center justify-between gap-2">
-                                    <div className="flex items-center gap-2">
-                                        <span className={cn(
-                                            "text-[9px] font-bold px-2 py-0.5 rounded-md border border-white/[0.04] bg-white/[0.03]",
-                                            dateGroup.color
-                                        )}>
-                                            {dateGroup.label}
-                                        </span>
-                                        <span className="text-[#F1F5F9] text-[11px] font-bold tabular-nums">
-                                            {formatRupiah(item.amount)}
-                                        </span>
-                                    </div>
+        <div className="space-y-3">
+          <AnimatePresence initial={false}>
+            {filteredAlerts.length > 0 ? (
+              filteredAlerts.map((alert) => {
+                const isDismissed = !!alert.dismissed_at
+                const isRead = !!alert.read_at
+                const isBusy = busyId === alert.id || undoingId === alert.id
+                const hasDeepLink = !!getAlertDeepLink(alert.source)
 
-                                    <div className="flex items-center gap-1">
-                                        <motion.button
-                                            whileTap={{ scale: 0.9 }}
-                                            onClick={e => { e.preventDefault(); e.stopPropagation(); onRemind() }}
-                                            className="flex items-center gap-1 text-[10px] font-bold text-amber-400 hover:text-amber-300 px-2 py-1 rounded-md bg-amber-500/10 border border-amber-500/20 active:scale-95 transition-all"
-                                        >
-                                            <Bell size={10} />
-                                            Ingatkan
-                                        </motion.button>
-                                        <button
-                                            onClick={e => { e.preventDefault(); e.stopPropagation(); onLongPress(item.id, e); }}
-                                            className="p-1 rounded-md hover:bg-white/[0.06] active:scale-90 transition-all"
-                                        >
-                                            <MoreVertical size={12} className="text-[#64748B]" />
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <ChevronRight size={16} className="text-[#475569] shrink-0 mt-3" />
+                return (
+                  <motion.div
+                    key={alert.id}
+                    layout
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    className="relative overflow-hidden rounded-[24px]"
+                  >
+                    {!isDismissed ? (
+                      <div className="pointer-events-none absolute inset-0 flex items-stretch overflow-hidden rounded-[24px]">
+                        <div className="flex flex-1 items-center justify-start bg-cyan-500/15 pl-5">
+                          <div className="flex items-center gap-2 text-cyan-300">
+                            {isRead ? <EyeOff size={16} /> : <Eye size={16} />}
+                            <span className="text-[11px] font-bold uppercase tracking-wider">
+                              {isRead ? "Belum dibaca" : "Dibaca"}
+                            </span>
+                          </div>
                         </div>
+                        <div className="flex flex-1 items-center justify-end bg-rose-500/15 pr-5">
+                          <div className="flex items-center gap-2 text-rose-300">
+                            <span className="text-[11px] font-bold uppercase tracking-wider">Dismiss</span>
+                            <Trash2 size={16} />
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <motion.div
+                      layout
+                      drag={isDismissed ? false : "x"}
+                      dragSnapToOrigin
+                      dragElastic={0.12}
+                      whileDrag={{ scale: 0.992 }}
+                      onDragEnd={(_, info) => {
+                        if (isBusy || isDismissed) return
+                        if (shouldTriggerReadSwipe(info)) {
+                          void handleMarkRead(alert, !isRead)
+                          return
+                        }
+                        if (shouldTriggerDismissSwipe(info)) {
+                          void handleDismiss(alert)
+                        }
+                      }}
+                      className={cn(
+                        "rounded-[24px] border p-4 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.55)] backdrop-blur-xl",
+                        isDismissed
+                          ? "border-white/[0.04] bg-[#0B1120]/55 opacity-70"
+                          : "border-white/[0.07] bg-[#0B1120]/80"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={() => void handleOpenAlert(alert)}
+                          disabled={!hasDeepLink}
+                          className={cn(
+                            "min-w-0 flex-1 text-left",
+                            hasDeepLink ? "cursor-pointer" : "cursor-default"
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className={severityBadgeClass(alert.type)}>{severityLabel(alert.type)}</span>
+                            {isDismissed ? (
+                              <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[#94A3B8]">
+                                Dismissed
+                              </span>
+                            ) : !isRead ? (
+                              <span className="rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-cyan-300">
+                                Baru
+                              </span>
+                            ) : (
+                              <span className="rounded-full border border-white/[0.08] bg-white/[0.04] px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-[#94A3B8]">
+                                Dibaca
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="mt-3 flex items-center gap-2">
+                            <h2 className="truncate text-base font-bold text-white">{alert.title}</h2>
+                            {!isRead && !isDismissed ? <span className="h-2 w-2 shrink-0 rounded-full bg-cyan-400" /> : null}
+                            {hasDeepLink ? <ChevronRight size={14} className="shrink-0 text-[#64748B]" /> : null}
+                          </div>
+                          <p className="mt-1 text-sm leading-6 text-[#94A3B8]">{alert.message}</p>
+                          <p className="mt-3 text-[11px] text-[#64748B]">
+                            {new Date(alert.created_at).toLocaleDateString("id-ID", {
+                              day: "numeric",
+                              month: "short",
+                              year: "numeric",
+                            })}
+                          </p>
+                        </button>
+                      </div>
+
+                      {!isDismissed ? (
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleMarkRead(alert, !isRead)}
+                            disabled={isBusy}
+                            className="inline-flex items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-3 py-2 text-[11px] font-bold text-cyan-300 transition disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {isRead ? <EyeOff size={13} /> : <Eye size={13} />}
+                            {isRead ? "Tandai belum dibaca" : "Tandai dibaca"}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => void handleDismiss(alert)}
+                            disabled={isBusy}
+                            className="inline-flex items-center gap-2 rounded-full border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-[11px] font-bold text-rose-300 transition disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <Trash2 size={13} />
+                            Dismiss
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void restoreDismissedAlert(alert, "manual")}
+                            disabled={isBusy}
+                            className="inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[11px] font-bold text-emerald-300 transition disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <RotateCcw size={13} />
+                            Pulihkan alert
+                          </button>
+                        </div>
+                      )}
+                    </motion.div>
+                  </motion.div>
+                )
+              })
+            ) : (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="rounded-[24px] border border-white/[0.07] bg-[#0B1120]/80 px-5 py-16 text-center shadow-[0_20px_60px_-20px_rgba(0,0,0,0.55)] backdrop-blur-xl"
+              >
+                <BellRing size={28} className="mx-auto mb-4 text-[#475569]" />
+                <p className="text-base font-bold text-white">{emptyStateCopy.title}</p>
+                <p className="mt-2 text-sm text-[#94A3B8]">{emptyStateCopy.description}</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </section>
+
+      <div className="pointer-events-none fixed bottom-5 left-4 right-4 z-[80] mx-auto flex max-w-md flex-col gap-3">
+        <AnimatePresence initial={false}>
+          {undoDismissStack.map((item, index) => {
+            const remainingRatio = Math.max(0, Math.min(1, (item.expiresAt - undoNow) / UNDO_DISMISS_WINDOW_MS))
+            const targetAlert = alerts.find((alert) => alert.id === item.alertId)
+
+            return (
+              <motion.div
+                key={item.alertId}
+                layout
+                initial={{ opacity: 0, y: 24, scale: 0.94, filter: "blur(10px)" }}
+                animate={{
+                  opacity: 1,
+                  y: 0,
+                  scale: 1 - index * 0.03,
+                  filter: "blur(0px)",
+                }}
+                exit={{ opacity: 0, y: 18, scale: 0.92, scaleY: 0.78, filter: "blur(10px)" }}
+                transition={{ type: "spring", damping: 28, stiffness: 320, mass: 0.9 }}
+                style={{ transformOrigin: "bottom center" }}
+                className="pointer-events-auto"
+              >
+                <div className="overflow-hidden rounded-[24px] border border-rose-500/20 bg-[#101827]/95 p-4 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.75)] backdrop-blur-2xl">
+                  <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-rose-400 via-amber-400 to-amber-500 transition-[width] duration-75 ease-linear"
+                      style={{ width: `${remainingRatio * 100}%` }}
+                    />
+                  </div>
+
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-white">Alert didismiss</p>
+                      <p className="mt-1 truncate text-[12px] text-[#94A3B8]">{item.title}</p>
                     </div>
-                </Link>
-            </motion.div>
-        </motion.div>
-    )
+
+                    <button
+                      type="button"
+                      onClick={() => removeUndoItem(item.alertId)}
+                      className="shrink-0 rounded-full border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[#94A3B8] transition hover:bg-white/[0.08]"
+                    >
+                      Tutup
+                    </button>
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <p className="text-[11px] text-[#64748B]">
+                      {undoDismissStack.length > 1 ? `${undoDismissStack.length} alert siap di-undo` : "Bisa dibatalkan dalam beberapa detik."}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!targetAlert) return
+                        void restoreDismissedAlert(targetAlert, "undo")
+                      }}
+                      disabled={!targetAlert || undoingId === item.alertId}
+                      className="inline-flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-3.5 py-2 text-[11px] font-bold text-amber-300 transition disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Undo2 size={13} />
+                      {undoingId === item.alertId ? "Mengurungkan..." : "Undo dismiss"}
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            )
+          })}
+        </AnimatePresence>
+      </div>
+    </>
+  )
 }

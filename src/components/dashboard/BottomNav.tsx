@@ -1,102 +1,79 @@
 //src/components/dashboard/BottomNav.tsx
 
-'use client'
+"use client"
 
-import {
-  Home,
-  Wallet,
-  BarChart3,
-  History,
-} from 'lucide-react'
+import { motion } from "framer-motion"
+import { Home, Activity, BarChart3, User } from "lucide-react"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
+import { cn } from "@/lib/utils"
+import { ROUTES } from "@/lib/routes"
 
-export default function BottomNav({
-  page,
-  setPage,
-}: any) {
+const NAV_ITEMS = [
+  { id: "home", label: "Home", icon: Home, href: ROUTES.dashboard },
+  { id: "activity", label: "Activity", icon: Activity, href: "/activity" },
+  { id: "analytics", label: "Analytics", icon: BarChart3, href: ROUTES.analytics },
+  { id: "profile", label: "Profile", icon: User, href: ROUTES.profile },
+] as const
 
-  const menus = [
-    {
-      key: 'home',
-      icon: Home,
-      label: 'Home',
-    },
-    {
-      key: 'assets',
-      icon: Wallet,
-      label: 'Wallet',
-    },
-    {
-      key: 'report',
-      icon: BarChart3,
-      label: 'Insight',
-    },
-    {
-      key: 'history',
-      icon: History,
-      label: 'History',
-    },
-  ]
+const SPRING = { type: "spring" as const, stiffness: 400, damping: 30 }
+
+const triggerHaptic = () => {
+  if (typeof navigator !== "undefined" && navigator.vibrate) {
+    navigator.vibrate(8)
+  }
+}
+
+export default function BottomNav() {
+  const pathname = usePathname()
 
   return (
-    <nav className="
-      fixed
-      bottom-0
-      left-0
-      right-0
-      z-40
-      bg-white/90
-      backdrop-blur-2xl
-      border-t
-      border-slate-200
-      px-3
-      py-3
-      flex
-      justify-around
-    ">
+    <nav className="fixed bottom-0 left-0 right-0 z-50" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <div className="absolute inset-0 border-t border-white/[0.08] bg-[#030712]/94 backdrop-blur-2xl" />
 
-      {menus.map((item) => {
+      <div className="relative flex items-center justify-around px-2 pb-2 pt-2.5">
+        {NAV_ITEMS.map(({ id, label, icon: Icon, href }) => {
+          const isActive = pathname === href || pathname.startsWith(`${href}/`)
 
-        const Icon = item.icon
+          return (
+            <Link
+              key={id}
+              href={href}
+              onClick={triggerHaptic}
+              className="relative flex w-16 flex-col items-center justify-center gap-1 py-1.5"
+              style={{ touchAction: "manipulation" }}
+            >
+              {isActive ? (
+                <motion.div
+                  layoutId="navGlow"
+                  transition={SPRING}
+                  className="absolute inset-0 rounded-[18px] border border-cyan-400/18 bg-cyan-500/10"
+                />
+              ) : null}
 
-        return (
-          <button
-            key={item.key}
-            onClick={() =>
-              setPage(item.key)
-            }
-            className="
-              flex
-              flex-col
-              items-center
-              gap-1
-            "
-          >
+              <div className="relative z-10">
+                <Icon
+                  size={20}
+                  className={cn(
+                    "transition-colors duration-200",
+                    isActive ? "text-[#38BDF8] scale-105" : "text-slate-500"
+                  )}
+                  strokeWidth={isActive ? 2.4 : 1.8}
+                />
+              </div>
 
-            <Icon
-              size={22}
-              className={
-                page === item.key
-                  ? 'text-blue-600'
-                  : 'text-slate-400'
-              }
-            />
-
-            <span className={`
-              text-[11px]
-              font-semibold
-              ${
-                page === item.key
-                  ? 'text-blue-600'
-                  : 'text-slate-400'
-              }
-            `}>
-              {item.label}
-            </span>
-
-          </button>
-        )
-      })}
-
+              <span
+                className={cn(
+                  "relative z-10 text-[9px] font-semibold tracking-wide transition-colors duration-200",
+                  isActive ? "text-[#38BDF8]" : "text-slate-500"
+                )}
+              >
+                {label}
+              </span>
+            </Link>
+          )
+        })}
+      </div>
     </nav>
   )
 }

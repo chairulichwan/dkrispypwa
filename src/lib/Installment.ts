@@ -1,3 +1,4 @@
+//src\lib\Installment.ts
 export interface InstallmentRow {
   period: number
   date: string
@@ -14,6 +15,8 @@ export interface InstallmentSummary {
   schedule: InstallmentRow[]
 }
 
+const toIsoDate = (date: Date) => date.toISOString().split("T")[0]
+
 /**
  * Flat:
  * - ratePercent dibaca sebagai % per bulan
@@ -25,24 +28,26 @@ export function calcFlat(
   count: number,
   startDate: Date
 ): InstallmentSummary {
-  const monthlyRate = ratePercent / 100
-  const monthlyInterest = Math.round(principal * monthlyRate)
-  const monthlyPrincipal = Math.round(principal / count)
+  const safePrincipal = Math.max(0, Math.round(principal || 0))
+  const safeCount = Math.max(1, Math.trunc(count || 1))
+  const monthlyRate = Math.max(0, Number(ratePercent) || 0) / 100
+  const monthlyInterest = Math.round(safePrincipal * monthlyRate)
+  const monthlyPrincipal = Math.round(safePrincipal / safeCount)
   const monthlyPayment = monthlyPrincipal + monthlyInterest
 
   const schedule: InstallmentRow[] = []
-  let remaining = principal
+  let remaining = safePrincipal
 
-  for (let i = 1; i <= count; i += 1) {
+  for (let i = 1; i <= safeCount; i += 1) {
     const date = new Date(startDate)
     date.setMonth(date.getMonth() + i)
 
-    const principalPortion = i === count ? remaining : monthlyPrincipal
+    const principalPortion = i === safeCount ? remaining : Math.min(remaining, monthlyPrincipal)
     remaining -= principalPortion
 
     schedule.push({
       period: i,
-      date: date.toISOString().split("T")[0],
+      date: toIsoDate(date),
       principal: principalPortion,
       interest: monthlyInterest,
       total: principalPortion + monthlyInterest,
@@ -50,16 +55,19 @@ export function calcFlat(
     })
   }
 
+  const totalInterest = schedule.reduce((sum, row) => sum + row.interest, 0)
+  const totalPayment = schedule.reduce((sum, row) => sum + row.total, 0)
+
   return {
     monthlyPayment,
-    totalPayment: principal + monthlyInterest * count,
-    totalInterest: monthlyInterest * count,
+    totalPayment,
+    totalInterest,
     schedule,
   }
 }
 
 /**
- * Efektif / Anuitas:
+ * Efektif / anuitas:
  * - ratePercent dibaca sebagai % per tahun
  * - bunga bulanan dihitung dari sisa pokok
  */
@@ -69,33 +77,35 @@ export function calcEffective(
   count: number,
   startDate: Date
 ): InstallmentSummary {
-  const monthlyRate = ratePercent / 100 / 12
+  const safePrincipal = Math.max(0, Math.round(principal || 0))
+  const safeCount = Math.max(1, Math.trunc(count || 1))
+  const monthlyRate = Math.max(0, Number(ratePercent) || 0) / 100 / 12
 
   let monthlyPayment: number
   if (monthlyRate === 0) {
-    monthlyPayment = Math.ceil(principal / count)
+    monthlyPayment = Math.ceil(safePrincipal / safeCount)
   } else {
     monthlyPayment = Math.ceil(
-      (principal * monthlyRate * Math.pow(1 + monthlyRate, count)) /
-        (Math.pow(1 + monthlyRate, count) - 1)
+      (safePrincipal * monthlyRate * Math.pow(1 + monthlyRate, safeCount)) /
+        (Math.pow(1 + monthlyRate, safeCount) - 1)
     )
   }
 
   const schedule: InstallmentRow[] = []
-  let remaining = principal
+  let remaining = safePrincipal
   let totalInterest = 0
   let totalPayment = 0
 
-  for (let i = 1; i <= count; i += 1) {
+  for (let i = 1; i <= safeCount; i += 1) {
     const date = new Date(startDate)
     date.setMonth(date.getMonth() + i)
 
     let interest = Math.round(remaining * monthlyRate)
     let principalPortion = monthlyPayment - interest
 
-    if (i === count || principalPortion >= remaining) {
+    if (i === safeCount || principalPortion >= remaining) {
       principalPortion = remaining
-      interest = monthlyPayment - principalPortion
+      interest = monthlyRate === 0 ? 0 : Math.max(0, monthlyPayment - principalPortion)
       remaining = 0
     } else {
       remaining -= principalPortion
@@ -106,7 +116,7 @@ export function calcEffective(
 
     schedule.push({
       period: i,
-      date: date.toISOString().split("T")[0],
+      date: toIsoDate(date),
       principal: principalPortion,
       interest,
       total: principalPortion + interest,
