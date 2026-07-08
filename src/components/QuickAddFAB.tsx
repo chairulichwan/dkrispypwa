@@ -33,6 +33,10 @@ interface Props {
 
 type QuickType = "income" | "expense"
 
+const STORAGE_LAST_ACCOUNT_KEY = "dkrispy:quick-add:last-account"
+const STORAGE_LAST_TYPE_KEY = "dkrispy:quick-add:last-type"
+const PRESET_AMOUNTS = [20000, 50000, 100000, 250000] as const
+
 const ACTIONS = [
   {
     id: "income" as const,
@@ -82,6 +86,28 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
   const [amount, setAmount] = useState("")
   const [note, setNote] = useState("")
   const [loading, setLoading] = useState(false)
+  const [lastUsedType, setLastUsedType] = useState<QuickType>("expense")
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const storedType = window.localStorage.getItem(STORAGE_LAST_TYPE_KEY)
+    const storedAccountId = window.localStorage.getItem(STORAGE_LAST_ACCOUNT_KEY)
+
+    if (storedType === "income" || storedType === "expense") {
+      setTxType(storedType)
+      setLastUsedType(storedType)
+    }
+
+    if (storedAccountId && accounts.some((account) => account.id === storedAccountId)) {
+      setAccountId(storedAccountId)
+      return
+    }
+
+    if (!storedAccountId && accounts[0]?.id) {
+      setAccountId(accounts[0].id)
+    }
+  }, [accounts])
 
   useEffect(() => {
     if (!accountId && accounts[0]?.id) {
@@ -101,12 +127,27 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
   const resetForm = () => {
     setAmount("")
     setNote("")
+
+    if (typeof window !== "undefined") {
+      const storedAccountId = window.localStorage.getItem(STORAGE_LAST_ACCOUNT_KEY)
+      if (storedAccountId && accounts.some((account) => account.id === storedAccountId)) {
+        setAccountId(storedAccountId)
+        return
+      }
+    }
+
     setAccountId(accounts[0]?.id ?? "")
   }
 
   const openSheet = (type: QuickType) => {
     triggerHaptic("medium")
     setTxType(type)
+    setLastUsedType(type)
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(STORAGE_LAST_TYPE_KEY, type)
+    }
+
     setOpen(false)
     setSheetOpen(true)
     resetForm()
@@ -156,6 +197,12 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
         }
       )
 
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(STORAGE_LAST_TYPE_KEY, txType)
+        window.localStorage.setItem(STORAGE_LAST_ACCOUNT_KEY, accountId)
+      }
+
+      setLastUsedType(txType)
       setSheetOpen(false)
       resetForm()
       await onSuccess?.()
@@ -185,7 +232,7 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: 10, scale: 0.94 }}
               transition={INTERACTIVE_SPRING}
-              className="mb-5 flex gap-3 pointer-events-auto"
+              className="mb-5 flex flex-wrap items-end justify-center gap-3 pointer-events-auto"
             >
               {ACTIONS.map((action, index) => (
                 <motion.button
@@ -204,6 +251,21 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
                   <span className="text-[10px] font-semibold text-slate-300">{action.label}</span>
                 </motion.button>
               ))}
+
+              <motion.button
+                initial={{ opacity: 0, y: 12, scale: 0.92 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 10, scale: 0.92 }}
+                transition={{ ...INTERACTIVE_SPRING, delay: 0.06 }}
+                whileTap={TAP_FEEDBACK}
+                onClick={() => openSheet(lastUsedType)}
+                className="flex flex-col items-center gap-1.5"
+              >
+                <div className="flex h-12 w-12 items-center justify-center rounded-[18px] border border-white/[0.10] bg-white/[0.05] text-white shadow-lg">
+                  {lastUsedType === "income" ? <TrendingUp size={18} className="text-emerald-300" /> : <TrendingDown size={18} className="text-rose-300" />}
+                </div>
+                <span className="text-[10px] font-semibold text-slate-300">Terakhir</span>
+              </motion.button>
 
               <motion.button
                 initial={{ opacity: 0, y: 12, scale: 0.92 }}
@@ -324,12 +386,34 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
                   />
                 </div>
 
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {PRESET_AMOUNTS.map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        triggerHaptic("light")
+                        setAmount(formatInputRupiah(String(preset)))
+                      }}
+                      className="rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-[11px] font-semibold text-slate-300 transition-colors hover:border-cyan-400/20 hover:text-white"
+                    >
+                      {formatRupiah(preset, true)}
+                    </button>
+                  ))}
+                </div>
+
                 <div className="mb-4">
                   <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-400">Akun</p>
                   <div className="rounded-[20px] border border-white/[0.08] bg-[#0B1528] p-3">
                     <select
                       value={accountId}
-                      onChange={(event) => setAccountId(event.target.value)}
+                      onChange={(event) => {
+                        const nextAccountId = event.target.value
+                        setAccountId(nextAccountId)
+                        if (typeof window !== "undefined") {
+                          window.localStorage.setItem(STORAGE_LAST_ACCOUNT_KEY, nextAccountId)
+                        }
+                      }}
                       className="h-11 w-full appearance-none rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 text-sm font-medium text-white outline-none"
                     >
                       {accounts.length === 0 ? <option value="">Belum ada akun</option> : null}
@@ -358,6 +442,12 @@ export default function QuickAddFAB({ accounts, userId, onSuccess }: Props) {
                   placeholder="Catatan opsional"
                   className="mb-5 h-12 w-full rounded-[20px] border border-white/[0.08] bg-[#0B1528] px-4 text-sm text-white outline-none placeholder:text-slate-600"
                 />
+
+                {selectedAccount ? (
+                  <p className="mb-4 text-[11px] text-slate-400">
+                    Akun aktif: <span className="font-medium text-slate-200">{selectedAccount.name}</span>
+                  </p>
+                ) : null}
 
                 {!hasAccounts ? (
                   <p className="mb-4 text-xs text-amber-300">Tambahkan akun terlebih dahulu sebelum mencatat transaksi.</p>

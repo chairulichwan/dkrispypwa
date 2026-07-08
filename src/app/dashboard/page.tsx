@@ -17,7 +17,6 @@ type DebtDashboardRow = Pick<
   | "type"
   | "amount"
   | "paid_amount"
-  | "paid_principal"
   | "status"
   | "due_date"
   | "archived_at"
@@ -68,7 +67,7 @@ export default async function DashboardPage() {
       .order("is_default", { ascending: false })
       .order("name", { ascending: true }),
     (supabase.from("debts") as any)
-      .select("id, type, amount, paid_amount, paid_principal, status, due_date, archived_at, total_amount_due, contacts(name)")
+      .select("id, type, amount, paid_amount, status, due_date, archived_at, total_amount_due, contacts(name)")
       .eq("user_id", user.id),
     supabase
       .from("debt_installments")
@@ -96,15 +95,20 @@ export default async function DashboardPage() {
   const liquidTotal = accountTotals.totalWealth
 
   const debts = (rawDebts ?? []) as DebtDashboardRow[]
-  const piutang = debts.reduce((sum, debt) => {
-    if (debt.type !== "piutang") return sum
-    return sum + Math.max(0, (Number(debt.amount) || 0) - (Number(debt.paid_principal) || 0))
-  }, 0)
+  const activeVisibleDebts = debts.filter((debt) => debt.status === "aktif" && !debt.archived_at)
+  const getDebtOutstanding = (debt: DebtDashboardRow) => {
+    const totalAmountDue = Number(debt.total_amount_due) || Number(debt.amount) || 0
+    const paidAmount = Number(debt.paid_amount) || 0
+    return Math.max(0, totalAmountDue - paidAmount)
+  }
 
-  const hutang = debts.reduce((sum, debt) => {
-    if (debt.type !== "hutang") return sum
-    return sum + Math.max(0, (Number(debt.amount) || 0) - (Number(debt.paid_principal) || 0))
-  }, 0)
+  const piutang = activeVisibleDebts
+    .filter((debt) => debt.type === "piutang")
+    .reduce((sum, debt) => sum + getDebtOutstanding(debt), 0)
+
+  const hutang = activeVisibleDebts
+    .filter((debt) => debt.type === "hutang")
+    .reduce((sum, debt) => sum + getDebtOutstanding(debt), 0)
 
   const totalWealth = liquidTotal + piutang - hutang
   const walletTotal = liquidTotal

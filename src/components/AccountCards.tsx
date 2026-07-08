@@ -1,19 +1,18 @@
 "use client"
 
-import { type ReactNode, useRef, useState } from "react"
+import { type ReactNode, useEffect, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
-import { ChevronRight, Plus, CreditCard, Eye, EyeOff, Copy, Check } from "lucide-react"
+import { ChevronRight, Plus, CreditCard, Eye, EyeOff, Copy, Check, ArrowUpRight, History, PanelTopOpen } from "lucide-react"
 import { useRouter } from "next/navigation"
 import { ACCOUNT_STYLE, type Account, type AccountType } from "@/app/dashboard/types"
 import { INTERACTIVE_SPRING, TAP_FEEDBACK, EASE_OUT_SMOOTH } from "@/lib/motion"
 import { formatRupiah, cn, maskAccountNumber, formatAccountNumber } from "@/lib/utils"
-import { ROUTES, accountDetailHref } from "@/lib/routes"
+import { ROUTES, accountDetailHref, transferFromHref } from "@/lib/routes"
 import toast from "react-hot-toast"
 
 interface AccountCardsProps {
   accounts: Account[]
   onCardClick?: (account: Account) => void
-  onLongPress?: (account: Account, pos: { x: number; y: number }) => void
 }
 
 const FALLBACK_STYLE = {
@@ -26,10 +25,15 @@ const FALLBACK_STYLE = {
   label: "Lainnya",
 }
 
-const LONG_PRESS_MS = 420
-
-export default function AccountCards({ accounts, onCardClick, onLongPress }: AccountCardsProps) {
+export default function AccountCards({ accounts, onCardClick }: AccountCardsProps) {
   const router = useRouter()
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (expandedId && !accounts.some((account) => account.id === expandedId)) {
+      setExpandedId(null)
+    }
+  }, [accounts, expandedId])
 
   return (
     <section className="space-y-5">
@@ -42,7 +46,7 @@ export default function AccountCards({ accounts, onCardClick, onLongPress }: Acc
               {accounts.length}
             </span>
           </div>
-          <p className="mt-1 pl-5 text-[11px] text-slate-400">Tap untuk detail, hold singkat untuk shortcut premium</p>
+          <p className="mt-1 pl-5 text-[11px] text-slate-400">Tap sekali untuk membuka shortcut di bawah kartu</p>
         </div>
 
         <button
@@ -57,18 +61,80 @@ export default function AccountCards({ accounts, onCardClick, onLongPress }: Acc
       <div className="-mx-1 flex snap-x snap-mandatory gap-4 overflow-x-auto px-1 pb-1 scrollbar-hide">
         {accounts.map((account, index) => {
           const cfg = ACCOUNT_STYLE[account.type as AccountType] ?? FALLBACK_STYLE
+          const isExpanded = expandedId === account.id
 
           return (
-            <AccountCardItem
-              key={account.id}
-              account={account}
-              cfg={cfg}
-              index={index}
-              onNavigate={() =>
-                onCardClick ? onCardClick(account) : router.push(accountDetailHref(account.id))
-              }
-              onLongPress={onLongPress ? (pos) => onLongPress(account, pos) : undefined}
-            />
+            <div key={account.id} className="min-w-[82%] snap-center space-y-3 sm:min-w-[320px] lg:min-w-[280px]">
+              <AccountCardItem
+                account={account}
+                cfg={cfg}
+                index={index}
+                expanded={isExpanded}
+                onToggle={() => setExpandedId((current) => (current === account.id ? null : account.id))}
+                onDetailRequest={() => {
+                  if (onCardClick) {
+                    onCardClick(account)
+                    return
+                  }
+                  router.push(accountDetailHref(account.id))
+                }}
+              />
+
+              <AnimatePresence initial={false}>
+                {isExpanded ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={INTERACTIVE_SPRING}
+                    className="grid grid-cols-3 gap-2"
+                  >
+                    {[
+                      {
+                        id: "transfer",
+                        label: "Transfer",
+                        icon: <ArrowUpRight size={16} className="text-[#38BDF8]" />,
+                        onClick: () => router.push(transferFromHref(account.id)),
+                      },
+                      {
+                        id: "mutation",
+                        label: "Mutasi",
+                        icon: <History size={16} className="text-amber-300" />,
+                        onClick: () => router.push(accountDetailHref(account.id, "overview")),
+                      },
+                      {
+                        id: "detail",
+                        label: "Detail",
+                        icon: <PanelTopOpen size={16} className="text-emerald-300" />,
+                        onClick: () => {
+                          if (onCardClick) {
+                            onCardClick(account)
+                            return
+                          }
+                          router.push(accountDetailHref(account.id))
+                        },
+                      },
+                    ].map((action) => (
+                      <motion.button
+                        key={action.id}
+                        type="button"
+                        whileTap={TAP_FEEDBACK}
+                        transition={INTERACTIVE_SPRING}
+                        onClick={action.onClick}
+                        className="rounded-[20px] border border-white/[0.06] bg-[#0B1528] p-3"
+                      >
+                        <div className="flex flex-col items-center gap-2 text-center">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04]">
+                            {action.icon}
+                          </div>
+                          <span className="text-[11px] font-medium text-slate-300">{action.label}</span>
+                        </div>
+                      </motion.button>
+                    ))}
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+            </div>
           )
         })}
 
@@ -77,7 +143,7 @@ export default function AccountCards({ accounts, onCardClick, onLongPress }: Acc
           whileTap={TAP_FEEDBACK}
           transition={INTERACTIVE_SPRING}
           onClick={() => router.push(ROUTES.addAccount)}
-          className="min-w-[58%] snap-center rounded-[24px] border border-dashed border-white/[0.08] bg-white/[0.03] p-4 text-left text-slate-300 sm:min-w-[220px]"
+          className="min-w-[58%] snap-center rounded-[24px] border border-dashed border-white/[0.08] bg-white/[0.03] p-4 text-left text-slate-300 sm:min-w-[220px] lg:min-w-[240px]"
         >
           <div className="flex h-full flex-col justify-between gap-10">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.04] text-[#38BDF8]">
@@ -98,8 +164,9 @@ function AccountCardItem({
   account,
   cfg,
   index,
-  onNavigate,
-  onLongPress,
+  expanded,
+  onToggle,
+  onDetailRequest,
 }: {
   account: Account
   cfg: {
@@ -112,24 +179,15 @@ function AccountCardItem({
     label: string
   }
   index: number
-  onNavigate: () => void
-  onLongPress?: (pos: { x: number; y: number }) => void
+  expanded: boolean
+  onToggle: () => void
+  onDetailRequest: () => void
 }) {
   const [showNumber, setShowNumber] = useState(false)
   const [copied, setCopied] = useState(false)
-  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const suppressClickRef = useRef(false)
-  const lastPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
 
   const balance = account.balance ?? 0
   const isEmpty = balance === 0
-
-  const clearLongPress = () => {
-    if (longPressTimerRef.current) {
-      clearTimeout(longPressTimerRef.current)
-      longPressTimerRef.current = null
-    }
-  }
 
   const handleCopy = async (event: React.MouseEvent) => {
     event.stopPropagation()
@@ -157,51 +215,23 @@ function AccountCardItem({
   return (
     <motion.div
       initial={{ opacity: 0, y: 18, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
+      animate={{ opacity: 1, y: 0, scale: expanded ? 1.02 : 1 }}
       transition={{ duration: 0.42, delay: 0.05 * index, ease: EASE_OUT_SMOOTH }}
       whileTap={TAP_FEEDBACK}
-      onPointerDown={(event) => {
-        if (!onLongPress) return
-
-        lastPointerRef.current = { x: event.clientX, y: event.clientY }
-        clearLongPress()
-        longPressTimerRef.current = setTimeout(() => {
-          suppressClickRef.current = true
-          onLongPress(lastPointerRef.current)
-        }, LONG_PRESS_MS)
-      }}
-      onPointerMove={(event) => {
-        lastPointerRef.current = { x: event.clientX, y: event.clientY }
-      }}
-      onPointerUp={clearLongPress}
-      onPointerCancel={clearLongPress}
-      onPointerLeave={clearLongPress}
-      onContextMenu={(event) => {
-        event.preventDefault()
-        if (!onLongPress) return
-        suppressClickRef.current = true
-        onLongPress({ x: event.clientX, y: event.clientY })
-      }}
-      onClick={() => {
-        if (suppressClickRef.current) {
-          suppressClickRef.current = false
-          return
-        }
-        onNavigate()
-      }}
+      onClick={onToggle}
       role="button"
       tabIndex={0}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault()
-          onNavigate()
+          onToggle()
         }
       }}
       aria-label={`${cfg.label} ${account.name}, saldo ${isEmpty ? "kosong" : formatRupiah(balance)}`}
       className={cn(
-        "relative min-w-[82%] snap-center overflow-hidden rounded-[24px] border bg-[#0B1528] p-4 outline-none sm:min-w-[320px]",
+        "relative overflow-hidden rounded-[24px] border bg-[#0B1528] p-4 outline-none",
         "focus-visible:ring-2 focus-visible:ring-[#38BDF8]/50 focus-visible:ring-offset-2 focus-visible:ring-offset-[#030712]",
-        cfg.border
+        expanded ? "border-white/[0.14]" : cfg.border
       )}
       style={{ boxShadow: `0 18px 42px -30px ${cfg.accentColor}88` }}
     >
@@ -223,11 +253,23 @@ function AccountCardItem({
             </div>
           </div>
 
-          {account.is_default ? (
-            <span className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[10px] font-medium text-slate-300">
-              Utama
-            </span>
-          ) : null}
+          <div className="flex items-center gap-2 shrink-0">
+            {account.is_default ? (
+              <span className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[10px] font-medium text-slate-300">
+                Utama
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                onDetailRequest()
+              }}
+              className="rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-[10px] font-medium text-slate-300 transition hover:bg-white/[0.08]"
+            >
+              Detail
+            </button>
+          </div>
         </div>
 
         <div className="mt-5 flex items-end justify-between gap-3">
@@ -238,8 +280,8 @@ function AccountCardItem({
             </p>
           </div>
           <div className="text-right">
-            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Akun</p>
-            <p className="mt-1 text-sm text-slate-300">Tap buka detail</p>
+            <p className="text-[10px] uppercase tracking-[0.18em] text-slate-400">Shortcut</p>
+            <p className="mt-1 text-sm text-slate-300">{expanded ? "Siap dipakai" : "Tap untuk buka"}</p>
           </div>
         </div>
 
@@ -254,8 +296,6 @@ function AccountCardItem({
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   type="button"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onPointerUp={(event) => event.stopPropagation()}
                   onClick={toggleVisibility}
                   className="rounded-xl border border-white/[0.06] bg-white/[0.04] p-2 text-slate-300 transition hover:bg-white/[0.08]"
                   aria-label={showNumber ? "Sembunyikan nomor" : "Tampilkan nomor"}
@@ -287,8 +327,6 @@ function AccountCardItem({
 
                 <button
                   type="button"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onPointerUp={(event) => event.stopPropagation()}
                   onClick={handleCopy}
                   className="rounded-xl border border-white/[0.06] bg-white/[0.04] p-2 text-slate-300 transition hover:bg-white/[0.08]"
                   aria-label="Salin nomor rekening"

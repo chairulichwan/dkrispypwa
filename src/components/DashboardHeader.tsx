@@ -106,7 +106,7 @@ export default function DashboardHeader({
       />
 
       <div
-        className="relative flex items-center justify-between px-4 pt-12 pb-2 pointer-events-auto"
+        className="relative mx-auto flex w-full max-w-4xl items-center justify-between px-4 pt-12 pb-2 pointer-events-auto sm:px-5 lg:px-6"
         style={{ minHeight: `${HEADER_HEIGHT}px` }}
       >
         <div className="flex min-w-0 items-center gap-3.5">

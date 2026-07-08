@@ -23,7 +23,6 @@ import BalanceCard from "@/components/BalanceCard"
 import AccountCards from "@/components/AccountCards"
 import BottomNav from "@/components/BottomNav"
 import AccountDetailSheet from "@/components/accounts/AccountDetailSheet"
-import QuickActionOverlay from "@/components/accounts/QuickActionOverlay"
 import QuickAddFAB from "@/components/QuickAddFAB"
 import { getAlertDeepLink } from "@/lib/alerts"
 import {
@@ -114,14 +113,17 @@ interface TrendDebtRow {
   id: string
   type: string | null
   amount: number | string | null
-  paid_principal?: number | string | null
+  total_amount_due?: number | string | null
+  paid_amount?: number | string | null
+  status?: string | null
+  archived_at?: string | null
   disbursed_at?: string | null
   created_at?: string | null
 }
 
 interface TrendDebtPaymentRow {
   debt_id: string | null
-  principal_amount: number | string | null
+  amount: number | string | null
   paid_at: string | null
 }
 
@@ -157,9 +159,9 @@ function toMonthKey(date: Date) {
   return date.toISOString().slice(0, 7)
 }
 
-function getDebtPrincipalBasisDelta(type: string | null, principalAmount: number) {
-  if (type === "piutang") return principalAmount
-  if (type === "hutang") return -principalAmount
+function getDebtOutstandingBasisDelta(type: string | null, totalDueAmount: number) {
+  if (type === "piutang") return totalDueAmount
+  if (type === "hutang") return -totalDueAmount
   return 0
 }
 
@@ -202,8 +204,11 @@ function buildDailyWealthTrendPoints(
     const key = eventDate.slice(0, 10)
     if (!keySet.has(key)) return
 
-    const principalDelta = getDebtPrincipalBasisDelta(row.type, Number(row.amount) || 0)
-    deltaMap.set(key, (deltaMap.get(key) ?? 0) + principalDelta)
+    const totalDueDelta = getDebtOutstandingBasisDelta(
+      row.type,
+      Number(row.total_amount_due) || Number(row.amount) || 0
+    )
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + totalDueDelta)
   })
 
   paymentRows.forEach((row) => {
@@ -212,9 +217,9 @@ function buildDailyWealthTrendPoints(
     if (!keySet.has(key)) return
 
     const debtType = debtTypeMap.get(row.debt_id) ?? null
-    const principalAmount = Number(row.principal_amount) || 0
-    const principalDelta = debtType === "piutang" ? -principalAmount : debtType === "hutang" ? principalAmount : 0
-    deltaMap.set(key, (deltaMap.get(key) ?? 0) + principalDelta)
+    const paymentAmount = Number(row.amount) || 0
+    const paymentDelta = debtType === "piutang" ? -paymentAmount : debtType === "hutang" ? paymentAmount : 0
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + paymentDelta)
   })
 
   const points = new Array<number>(dayKeys.length)
@@ -266,8 +271,11 @@ function buildMonthlyWealthTrendPoints(
     const key = eventDate.slice(0, 7)
     if (!keySet.has(key)) return
 
-    const principalDelta = getDebtPrincipalBasisDelta(row.type, Number(row.amount) || 0)
-    deltaMap.set(key, (deltaMap.get(key) ?? 0) + principalDelta)
+    const totalDueDelta = getDebtOutstandingBasisDelta(
+      row.type,
+      Number(row.total_amount_due) || Number(row.amount) || 0
+    )
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + totalDueDelta)
   })
 
   paymentRows.forEach((row) => {
@@ -276,9 +284,9 @@ function buildMonthlyWealthTrendPoints(
     if (!keySet.has(key)) return
 
     const debtType = debtTypeMap.get(row.debt_id) ?? null
-    const principalAmount = Number(row.principal_amount) || 0
-    const principalDelta = debtType === "piutang" ? -principalAmount : debtType === "hutang" ? principalAmount : 0
-    deltaMap.set(key, (deltaMap.get(key) ?? 0) + principalDelta)
+    const paymentAmount = Number(row.amount) || 0
+    const paymentDelta = debtType === "piutang" ? -paymentAmount : debtType === "hutang" ? paymentAmount : 0
+    deltaMap.set(key, (deltaMap.get(key) ?? 0) + paymentDelta)
   })
 
   const points = new Array<number>(monthKeys.length)
@@ -385,16 +393,17 @@ function SmartInsightCenter({
     <motion.div
       whileTap={TAP_FEEDBACK}
       transition={INTERACTIVE_SPRING}
-      className="rounded-[24px] bg-white/[0.04] backdrop-blur-xl border border-white/[0.08] overflow-hidden"
+      className="relative overflow-hidden rounded-[24px] border border-white/[0.08] bg-[#0B1528]/88 backdrop-blur-xl"
     >
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/24 to-transparent" />
       <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-white/[0.05]">
-        <div className="flex items-center gap-2.5">
+        <div className="min-w-0 flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-400/20 flex items-center justify-center shrink-0">
             <Zap size={14} className="text-cyan-300" />
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-white text-[13px] font-semibold tracking-tight">Smart Insight</p>
-            <p className="text-slate-500 text-[10px]">Prioritas &amp; alert terkini</p>
+            <p className="text-slate-400 text-[10px]">Prioritas &amp; alert terkini</p>
           </div>
         </div>
 
@@ -502,7 +511,6 @@ export default function DashboardClient({
   const [isSyncing, setIsSyncing] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
-  const [overlayPos, setOverlayPos] = useState<{ x: number; y: number } | null>(null)
   const [liveUnreadAlertCount, setLiveUnreadAlertCount] = useState(unreadAlertCount)
   const [hasAlertCountBootstrapped, setHasAlertCountBootstrapped] = useState(false)
   const [selectedTrendPeriod, setSelectedTrendPeriod] = useState<FinancialPeriod>("7D")
@@ -575,11 +583,11 @@ export default function DashboardClient({
             .gte("created_at", cutoffDate.toISOString())
             .order("created_at", { ascending: true }),
           (supabase.from("debts") as any)
-            .select("id, type, amount, paid_principal, disbursed_at, created_at")
+            .select("id, type, amount, total_amount_due, paid_amount, status, archived_at, disbursed_at, created_at")
             .eq("user_id", userId)
             .order("created_at", { ascending: true }),
           (supabase.from("debt_payments") as any)
-            .select("debt_id, principal_amount, paid_at")
+            .select("debt_id, amount, paid_at")
             .eq("user_id", userId)
             .gte("paid_at", cutoffDate.toISOString())
             .order("paid_at", { ascending: true }),
@@ -644,19 +652,21 @@ export default function DashboardClient({
 
       const { data: debtRows, error: debtError } = await supabase
         .from("debts")
-        .select("type, amount, paid_principal, status")
+        .select("type, amount, paid_amount, total_amount_due, status, archived_at")
         .eq("user_id", user.id)
 
       if (debtError) throw debtError
 
-      const nextPiutang = (debtRows ?? []).reduce((sum, row: any) => {
+      const activeVisibleDebts = (debtRows ?? []).filter((row: any) => row.status === "aktif" && !row.archived_at)
+
+      const nextPiutang = activeVisibleDebts.reduce((sum: number, row: any) => {
         if (row.type !== "piutang") return sum
-        return sum + Math.max(0, (Number(row.amount) || 0) - (Number(row.paid_principal) || 0))
+        return sum + Math.max(0, (Number(row.total_amount_due) || Number(row.amount) || 0) - (Number(row.paid_amount) || 0))
       }, 0)
 
-      const nextHutang = (debtRows ?? []).reduce((sum, row: any) => {
+      const nextHutang = activeVisibleDebts.reduce((sum: number, row: any) => {
         if (row.type !== "hutang") return sum
-        return sum + Math.max(0, (Number(row.amount) || 0) - (Number(row.paid_principal) || 0))
+        return sum + Math.max(0, (Number(row.total_amount_due) || Number(row.amount) || 0) - (Number(row.paid_amount) || 0))
       }, 0)
 
       const nextWealthBasis = nextLiquidTotal + nextPiutang - nextHutang
@@ -706,22 +716,9 @@ export default function DashboardClient({
   const handleCardClick = useCallback((account: Account) => {
     triggerHaptic("light")
     setSelectedAccount(account)
-    setOverlayPos(null)
-  }, [])
-
-  const handleLongPress = useCallback((account: Account, pos: { x: number; y: number }) => {
-    triggerHaptic("medium")
-    setSelectedAccount(account)
-    setOverlayPos(pos)
   }, [])
 
   const handleCloseSheet = useCallback(() => {
-    setSelectedAccount(null)
-    setOverlayPos(null)
-  }, [])
-
-  const handleCloseOverlay = useCallback(() => {
-    setOverlayPos(null)
     setSelectedAccount(null)
   }, [])
 
@@ -781,9 +778,14 @@ export default function DashboardClient({
           paddingBottom: "calc(env(safe-area-inset-bottom) + 5rem)",
         }}
       >
-        <div style={{ height: `${HEADER_HEIGHT + 55}px` }} aria-hidden="true" />
+        <div
+          style={{
+            height: `calc(env(safe-area-inset-top) + ${HEADER_HEIGHT + 46}px)`,
+          }}
+          aria-hidden="true"
+        />
 
-        <div className="relative z-10 px-4 space-y-4 pb-4">
+        <div className="relative z-10 mx-auto w-full px-4 space-y-6 pb-6 sm:max-w-2xl sm:px-5 lg:max-w-4xl lg:px-6">
           <motion.div {...fadeUp(0.12)}>
             <BalanceCard
               hutang={hutang}
@@ -799,100 +801,101 @@ export default function DashboardClient({
           </motion.div>
 
           <motion.div {...fadeUp(0.20)}>
-            <AccountCards
-              accounts={accounts}
-              onCardClick={handleCardClick}
-              onLongPress={handleLongPress}
-            />
+            <AccountCards accounts={accounts} onCardClick={handleCardClick} />
           </motion.div>
 
-          <motion.div {...fadeUp(0.28)}>
-            <Link href={ROUTES.debts} className="block group">
-              <motion.div
-                whileTap={TAP_FEEDBACK}
-                transition={INTERACTIVE_SPRING}
-                className="rounded-[24px] p-4 bg-white/[0.04] backdrop-blur-xl border border-white/[0.08] hover:border-white/[0.14] transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-400/20 flex items-center justify-center">
-                      <Users className="text-violet-400" size={17} />
+          <div className="grid gap-6 sm:grid-cols-2">
+            <motion.div {...fadeUp(0.28)}>
+              <Link href={ROUTES.debts} className="block group h-full">
+                <motion.div
+                  whileTap={TAP_FEEDBACK}
+                  transition={INTERACTIVE_SPRING}
+                  className="relative h-full overflow-hidden rounded-[24px] border border-white/[0.08] bg-[#0B1528]/88 p-4 backdrop-blur-xl transition-colors hover:border-white/[0.14]"
+                >
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-violet-400/20 to-transparent" />
+                  <div className="flex h-full items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-400/20 flex items-center justify-center shrink-0">
+                        <Users className="text-violet-400" size={17} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-white text-sm font-semibold tracking-tight">Hutang &amp; Piutang</p>
+                        <p className="text-slate-400 text-[11px] leading-5">Kelola catatan pinjaman</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-white text-sm font-semibold tracking-tight">Hutang &amp; Piutang</p>
-                      <p className="text-slate-400 text-[11px]">Kelola catatan pinjaman</p>
+                    <div className="flex items-center gap-3 shrink-0">
+                      {piutang > 0 && (
+                        <div className="text-right">
+                          <p className="text-emerald-400 text-xs font-medium tabular-nums tracking-tight">
+                            {formatRupiah(piutang)}
+                          </p>
+                          <p className="text-slate-500 text-[9px]">piutang</p>
+                        </div>
+                      )}
+                      <ChevronRight
+                        className="text-slate-500 group-hover:translate-x-0.5 transition-transform"
+                        size={16}
+                      />
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    {piutang > 0 && (
-                      <div className="text-right">
-                        <p className="text-emerald-400 text-xs font-medium tabular-nums tracking-tight">
-                          {formatRupiah(piutang)}
-                        </p>
-                        <p className="text-slate-500 text-[9px]">piutang</p>
+                </motion.div>
+              </Link>
+            </motion.div>
+
+            <motion.div {...fadeUp(0.36)} className="sm:col-span-2">
+              <SmartInsightCenter
+                activeAlerts={activeAlerts}
+                debtReminderSummary={debtReminderSummary}
+                onNavigate={(href) => {
+                  triggerHaptic("light")
+                  router.push(href)
+                }}
+                unreadAlertCount={liveUnreadAlertCount}
+                urgentDebtReminders={urgentDebtReminders}
+              />
+            </motion.div>
+
+            <motion.div {...fadeUp(0.44)}>
+              <Link href={ROUTES.analytics} className="block group h-full">
+                <motion.div
+                  whileTap={TAP_FEEDBACK}
+                  transition={INTERACTIVE_SPRING}
+                  className="relative h-full overflow-hidden rounded-[24px] border border-cyan-400/15 bg-[#0B1528]/88 p-4 backdrop-blur-xl transition-colors hover:border-cyan-400/30"
+                >
+                  <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/24 to-transparent" />
+                  <div className="flex h-full items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-600/20 border border-cyan-400/25 flex items-center justify-center shrink-0">
+                        <TrendingUp className="text-cyan-400" size={17} />
                       </div>
-                    )}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-white text-sm font-semibold tracking-tight">Analitik Premium</p>
+                          <span className="px-1.5 py-0.5 rounded-md bg-cyan-500/10 border border-cyan-400/25 text-[9px] font-bold text-cyan-300 uppercase tracking-wider">
+                            PRO
+                          </span>
+                        </div>
+                        <p className="text-slate-400 text-[11px] leading-5">Prediksi arus kas &amp; kekayaan bersih</p>
+                      </div>
+                    </div>
                     <ChevronRight
-                      className="text-slate-500 group-hover:translate-x-0.5 transition-transform"
+                      className="text-slate-500 group-hover:translate-x-0.5 group-hover:text-cyan-400 transition-all shrink-0"
                       size={16}
                     />
                   </div>
-                </div>
-              </motion.div>
-            </Link>
-          </motion.div>
-
-          <motion.div {...fadeUp(0.36)}>
-            <SmartInsightCenter
-              activeAlerts={activeAlerts}
-              debtReminderSummary={debtReminderSummary}
-              onNavigate={(href) => {
-                triggerHaptic("light")
-                router.push(href)
-              }}
-              unreadAlertCount={liveUnreadAlertCount}
-              urgentDebtReminders={urgentDebtReminders}
-            />
-          </motion.div>
-
-          <motion.div {...fadeUp(0.44)}>
-            <Link href={ROUTES.analytics} className="block group">
-              <motion.div
-                whileTap={TAP_FEEDBACK}
-                transition={INTERACTIVE_SPRING}
-                className="rounded-[24px] p-4 bg-white/[0.04] backdrop-blur-xl border border-cyan-400/15 hover:border-cyan-400/30 transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-600/20 border border-cyan-400/25 flex items-center justify-center">
-                      <TrendingUp className="text-cyan-400" size={17} />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="text-white text-sm font-semibold tracking-tight">Analitik Premium</p>
-                        <span className="px-1.5 py-0.5 rounded-md bg-cyan-500/10 border border-cyan-400/25 text-[9px] font-bold text-cyan-300 uppercase tracking-wider">
-                          PRO
-                        </span>
-                      </div>
-                      <p className="text-slate-400 text-[11px]">Prediksi arus kas &amp; kekayaan bersih</p>
-                    </div>
-                  </div>
-                  <ChevronRight
-                    className="text-slate-500 group-hover:translate-x-0.5 group-hover:text-cyan-400 transition-all"
-                    size={16}
-                  />
-                </div>
-              </motion.div>
-            </Link>
-          </motion.div>
+                </motion.div>
+              </Link>
+            </motion.div>
+          </div>
 
           {accounts.length === 0 && (
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: 0.5, ...INTERACTIVE_SPRING }}
-              className="rounded-[24px] border border-amber-500/15 bg-amber-500/[0.05] p-5 flex items-center gap-4"
+              className="relative overflow-hidden rounded-[24px] border border-amber-500/15 bg-[#0B1528]/88 p-4 flex items-center gap-4"
             >
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-400/24 to-transparent" />
               <div className="w-10 h-10 rounded-xl bg-amber-500/15 flex items-center justify-center shrink-0 text-lg">
                 💡
               </div>
@@ -909,15 +912,8 @@ export default function DashboardClient({
 
       <AccountDetailSheet
         account={selectedAccount}
-        isOpen={!!selectedAccount && !overlayPos}
+        isOpen={!!selectedAccount}
         onClose={handleCloseSheet}
-      />
-
-      <QuickActionOverlay
-        accountId={selectedAccount?.id ?? ""}
-        isOpen={!!overlayPos}
-        onClose={handleCloseOverlay}
-        position={overlayPos}
       />
 
       <QuickAddFAB

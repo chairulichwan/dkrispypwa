@@ -29,7 +29,7 @@ export default function BottomNav() {
       <div className="absolute inset-0 border-t border-white/[0.08] bg-[#030712]/94 backdrop-blur-2xl" />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/18 to-transparent" />
 
-      <div className="relative flex items-center justify-around px-2 pb-2 pt-2.5">
+      <div className="relative mx-auto flex w-full max-w-4xl items-center justify-around px-2 pb-2 pt-2.5 sm:px-4">
         {NAV_ITEMS.map(({ id, label, icon: Icon, href }) => {
           const isActive = pathname === href || pathname.startsWith(`${href}/`)
 

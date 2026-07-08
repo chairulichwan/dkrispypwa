@@ -214,7 +214,7 @@ export default function BalanceCard({
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent" />
 
-      <div className="relative z-10 flex flex-col gap-5 p-5">
+      <div className="relative z-10 flex flex-col gap-5 p-5 sm:gap-6 sm:p-6">
         <div className="flex items-center justify-between">
           <div className="space-y-0.5">
             <h2 className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">Total Kekayaan</h2>
@@ -361,10 +361,10 @@ export default function BalanceCard({
                 const isAtEnd = target.scrollLeft + target.clientWidth >= target.scrollWidth - 15
                 setActiveSlide(isAtEnd ? 1 : 0)
               }}
-              className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden"
+              className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden sm:grid sm:grid-cols-3 sm:overflow-visible"
               style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
             >
-              <div className="flex min-h-[100px] w-[calc(50%-6px)] shrink-0 snap-start flex-col justify-between rounded-[22px] border border-emerald-500/15 bg-gradient-to-b from-emerald-500/[0.06] to-transparent p-4 shadow-sm backdrop-blur-md">
+              <div className="flex min-h-[100px] w-[calc(50%-6px)] shrink-0 snap-start flex-col justify-between rounded-[22px] border border-emerald-500/15 bg-gradient-to-b from-emerald-500/[0.06] to-transparent p-4 shadow-sm backdrop-blur-md sm:w-auto sm:min-w-0">
                 <div className="flex items-center gap-2.5">
                   <div className="relative shrink-0">
                     <div className="absolute inset-0 rounded-xl bg-emerald-500/20 blur-[6px]" />
@@ -391,7 +391,7 @@ export default function BalanceCard({
                 </div>
               </div>
 
-              <div className="flex min-h-[100px] w-[calc(50%-6px)] shrink-0 snap-start flex-col justify-between rounded-[22px] border border-amber-500/15 bg-gradient-to-b from-amber-500/[0.06] to-transparent p-4 shadow-sm backdrop-blur-md">
+              <div className="flex min-h-[100px] w-[calc(50%-6px)] shrink-0 snap-start flex-col justify-between rounded-[22px] border border-amber-500/15 bg-gradient-to-b from-amber-500/[0.06] to-transparent p-4 shadow-sm backdrop-blur-md sm:w-auto sm:min-w-0">
                 <div className="flex items-center gap-2.5">
                   <div className="relative shrink-0">
                     <div className="absolute inset-0 rounded-xl bg-amber-500/20 blur-[6px]" />
@@ -421,7 +421,7 @@ export default function BalanceCard({
                 </div>
               </div>
 
-              <div className="flex min-h-[100px] w-[calc(50%-6px)] shrink-0 snap-start flex-col justify-between rounded-[22px] border border-rose-500/15 bg-gradient-to-b from-rose-500/[0.06] to-transparent p-4 shadow-sm backdrop-blur-md">
+              <div className="flex min-h-[100px] w-[calc(50%-6px)] shrink-0 snap-start flex-col justify-between rounded-[22px] border border-rose-500/15 bg-gradient-to-b from-rose-500/[0.06] to-transparent p-4 shadow-sm backdrop-blur-md sm:w-auto sm:min-w-0">
                 <div className="flex items-center gap-2.5">
                   <div className="relative shrink-0">
                     <div className="absolute inset-0 rounded-xl bg-rose-500/20 blur-[6px]" />
@@ -452,7 +452,7 @@ export default function BalanceCard({
               </div>
             </div>
 
-            <div className="flex items-center justify-center gap-1.5 pt-0.5">
+            <div className="flex items-center justify-center gap-1.5 pt-0.5 sm:hidden">
               <div className={cn("h-1 rounded-full transition-all duration-300", activeSlide === 0 ? "w-3 bg-cyan-400/80" : "w-1.5 bg-white/10")} />
               <div className={cn("h-1 rounded-full transition-all duration-300", activeSlide === 1 ? "w-3 bg-cyan-400/80" : "w-1.5 bg-white/10")} />
             </div>
